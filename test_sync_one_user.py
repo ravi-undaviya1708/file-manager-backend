@@ -10,7 +10,7 @@ load_dotenv()
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from app.database import init_db
-from app.b2 import check_and_sync_user, get_b2_client
+from app.b2 import check_and_sync_user, get_b2_client, get_user_b2_prefix
 from app.config import get_settings
 
 async def main():
@@ -24,9 +24,10 @@ async def main():
     
     print("Checking Backblaze B2 objects...")
     client = get_b2_client()
-    response = client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{user_id}/")
+    b2_prefix = await get_user_b2_prefix(user_id)
+    response = client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{b2_prefix}/")
     contents = response.get("Contents", [])
-    print(f"Found {len(contents)} objects in the bucket for prefix {user_id}/:")
+    print(f"Found {len(contents)} objects in the bucket for prefix {b2_prefix}/:")
     for obj in contents:
         print(f"  - {obj['Key']} ({obj['Size']} bytes)")
 

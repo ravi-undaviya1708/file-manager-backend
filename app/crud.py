@@ -95,8 +95,15 @@ async def soft_delete_item(item_id: str, user_id: str) -> List[str]:
     """Soft-delete an item and all its descendants. Returns IDs of affected items."""
     affected_ids = await _collect_descendant_ids(item_id, user_id)
 
+    query_ids = []
+    for aid in affected_ids:
+        try:
+            query_ids.append(PydanticObjectId(aid))
+        except Exception:
+            query_ids.append(aid)
+
     await FileSystemItem.find(
-        {"_id": {"$in": affected_ids}, "user_id": user_id}
+        {"_id": {"$in": query_ids}, "user_id": user_id}
     ).update_many({"$set": {"is_deleted": True}})
 
     return affected_ids
@@ -106,8 +113,15 @@ async def hard_delete_item(item_id: str, user_id: str) -> List[str]:
     """Permanently delete an item and all its descendants."""
     affected_ids = await _collect_descendant_ids(item_id, user_id)
 
+    query_ids = []
+    for aid in affected_ids:
+        try:
+            query_ids.append(PydanticObjectId(aid))
+        except Exception:
+            query_ids.append(aid)
+
     await FileSystemItem.find(
-        {"_id": {"$in": affected_ids}, "user_id": user_id}
+        {"_id": {"$in": query_ids}, "user_id": user_id}
     ).delete()
 
     return affected_ids
@@ -117,8 +131,15 @@ async def restore_item(item_id: str, user_id: str) -> List[str]:
     """Restore a soft-deleted item and all its descendants."""
     affected_ids = await _collect_descendant_ids(item_id, user_id)
 
+    query_ids = []
+    for aid in affected_ids:
+        try:
+            query_ids.append(PydanticObjectId(aid))
+        except Exception:
+            query_ids.append(aid)
+
     await FileSystemItem.find(
-        {"_id": {"$in": affected_ids}, "user_id": user_id}
+        {"_id": {"$in": query_ids}, "user_id": user_id}
     ).update_many({"$set": {"is_deleted": False}})
 
     return affected_ids

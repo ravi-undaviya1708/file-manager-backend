@@ -24,20 +24,24 @@ async def main():
     user_id = str(user.id)
     print(f"Created Debug User: {user_id}")
     
+    from app.b2 import get_user_b2_prefix
+    b2_prefix = await get_user_b2_prefix(user_id)
+    print(f"B2 Prefix: {b2_prefix}")
+    
     await seed_user_data(user_id)
     items = await FileSystemItem.find(FileSystemItem.user_id == user_id).to_list()
     print(f"Seeded {len(items)} items in MongoDB.")
     
     # Run sync inline with detailed print
     print("\nRunning sync inline with debugging...")
-    root_key = f"{user_id}/.keep"
+    root_key = f"{b2_prefix}/.keep"
     create_b2_object(root_key, b"")
     
     for item in items:
         try:
             print(f"Syncing item '{item.name}' (type={item.type}, id={item.id})...")
             path = await get_item_path(item, user_id)
-            key = f"{user_id}/{path}"
+            key = f"{b2_prefix}/{path}"
             print(f"  Resolved path: '{path}' -> key: '{key}'")
             
             if item.type == "folder":
@@ -60,7 +64,7 @@ async def main():
     # Verify B2 objects
     print("\nVerifying final objects in B2...")
     b2_client = get_b2_client()
-    b2_response = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{user_id}/")
+    b2_response = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{b2_prefix}/")
     contents = b2_response.get("Contents", [])
     print(f"Found {len(contents)} objects in the B2 bucket:")
     for obj in contents:

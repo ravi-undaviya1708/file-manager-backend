@@ -21,7 +21,29 @@ from app.schemas import (
     MoveItemRequest,
     RenameItemRequest,
 )
+import logging
+import tempfile
+import os
+import shutil
+import asyncio
+import anyio
 
+logger = logging.getLogger(__name__)
+
+# Dictionary to hold lock objects for each upload session
+upload_locks = {}
+upload_locks_mutex = asyncio.Lock()
+
+async def get_upload_lock(upload_id: str) -> asyncio.Lock:
+    async with upload_locks_mutex:
+        if upload_id not in upload_locks:
+            upload_locks[upload_id] = asyncio.Lock()
+        return upload_locks[upload_id]
+
+async def clean_upload_lock(upload_id: str):
+    async with upload_locks_mutex:
+        if upload_id in upload_locks:
+            del upload_locks[upload_id]
 
 router = APIRouter(prefix="/api", tags=["File Manager"])
 
@@ -53,6 +75,8 @@ def _to_response(item) -> FileSystemItemResponse:
 )
 async def list_items(current_user: User = Depends(get_current_user)):
     """Return every file and folder for the authenticated user."""
+    from app.b2 import sync_b2_to_mongodb
+    await sync_b2_to_mongodb(str(current_user.id))
     items = await crud.get_all_items(str(current_user.id))
     return [_to_response(item) for item in items]
 
@@ -97,9 +121,10 @@ async def create_folder(
     item = await crud.create_item(body.name, "folder", str(current_user.id), body.parentId)
 
     # Sync folder creation to Backblaze B2
-    from app.b2 import create_b2_folder, get_item_path
+    from app.b2 import create_b2_folder, get_item_path, get_user_b2_prefix
     path = await get_item_path(item, str(current_user.id))
-    create_b2_folder(f"{current_user.id}/{path}")
+    prefix = await get_user_b2_prefix(str(current_user.id))
+    create_b2_folder(f"{prefix}/{path}")
 
     return _to_response(item)
 
@@ -267,6 +292,7 @@ async def delete_item(
             message=f"Permanently deleted {len(deleted_ids)} item(s)."
         )
     else:
+        # Keep files in Backblaze B2 on soft-delete (do not call handle_b2_delete here).
         deleted_ids = await crud.soft_delete_item(item_id, str(current_user.id))
         return MessageResponse(
             message=f"Moved {len(deleted_ids)} item(s) to bin."
@@ -298,6 +324,7 @@ async def restore_item(
         )
 
     restored_ids = await crud.restore_item(item_id, str(current_user.id))
+
     return MessageResponse(message=f"Restored {len(restored_ids)} item(s).")
 
 
@@ -364,8 +391,145 @@ async def upload_file(
     )
 
     # Sync file upload to Backblaze B2
-    from app.b2 import upload_b2_file, get_item_path
+    from app.b2 import upload_b2_file, get_item_path, get_user_b2_prefix
     path = await get_item_path(item, str(current_user.id))
-    upload_b2_file(f"{current_user.id}/{path}", content)
+    prefix = await get_user_b2_prefix(str(current_user.id))
+    upload_b2_file(f"{prefix}/{path}", content)
 
     return _to_response(item)
+
+
+@router.post(
+    "/files/upload/chunk",
+    status_code=201,
+    summary="Upload a file chunk",
+)
+async def upload_chunk(
+    file: UploadFile = File(...),
+    uploadId: str = Form(...),
+    chunkIndex: int = Form(...),
+    totalChunks: int = Form(...),
+    filename: str = Form(...),
+    parentId: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user),
+):
+    """Upload a file chunk to the specified parent folder.
+
+    Merges when all chunks are uploaded, then registers in DB and uploads to B2.
+    """
+    if not filename:
+        raise HTTPException(
+            status_code=400, detail={"error": "Filename is required."}
+        )
+
+    # Validate parent exists and belongs to user
+    if parentId:
+        parent = await crud.get_item_by_id(parentId, str(current_user.id))
+        if not parent:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Parent folder '{parentId}' not found."},
+            )
+
+    # Validate name duplicate on the first chunk to prevent wasting time on duplicate uploads
+    if chunkIndex == 0:
+        if await crud.check_duplicate_name(filename, parentId, "file", str(current_user.id)):
+            raise HTTPException(
+                status_code=409,
+                detail={"error": f'A file named "{filename}" already exists in this location.'},
+            )
+
+    # Path to temp directory for this upload
+    temp_dir = os.path.join(tempfile.gettempdir(), f"stitchdrive_upload_{uploadId}")
+    os.makedirs(temp_dir, exist_ok=True)
+    chunk_path = os.path.join(temp_dir, f"chunk_{chunkIndex}")
+
+    # Write chunk content to disk
+    try:
+        content = await file.read()
+        async with await anyio.open_file(chunk_path, "wb") as f:
+            await f.write(content)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Failed to save chunk to disk: {str(e)}"}
+        )
+
+    # Acquire lock for this upload to check status and merge safely
+    lock = await get_upload_lock(uploadId)
+    async with lock:
+        # Check if all chunks have been uploaded
+        all_chunks_exist = True
+        for i in range(totalChunks):
+            if not os.path.exists(os.path.join(temp_dir, f"chunk_{i}")):
+                all_chunks_exist = False
+                break
+
+        if not all_chunks_exist:
+            # Not complete yet, return status
+            return {
+                "status": "chunk_uploaded",
+                "chunkIndex": chunkIndex,
+                "totalChunks": totalChunks,
+            }
+
+        # Double check if we already merged (e.g. final file exists or db entry already exists)
+        # Check duplicate name again right before merging
+        if await crud.check_duplicate_name(filename, parentId, "file", str(current_user.id)):
+            # Cleanup temp files
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            await clean_upload_lock(uploadId)
+            raise HTTPException(
+                status_code=409,
+                detail={"error": f'A file named "{filename}" already exists in this location.'},
+            )
+
+        merged_file_path = os.path.join(temp_dir, "merged_file")
+        try:
+            # Merge all chunks sequentially
+            async with await anyio.open_file(merged_file_path, "wb") as outfile:
+                for i in range(totalChunks):
+                    curr_chunk_path = os.path.join(temp_dir, f"chunk_{i}")
+                    async with await anyio.open_file(curr_chunk_path, "rb") as infile:
+                        while True:
+                            data = await infile.read(128 * 1024)  # 128KB buffer
+                            if not data:
+                                break
+                            await outfile.write(data)
+            
+            # Calculate final file size
+            file_size = os.path.getsize(merged_file_path)
+
+            # Create MongoDB entry
+            item = await crud.create_item(
+                filename, "file", str(current_user.id), parentId, size=file_size
+            )
+
+            # Sync file upload to Backblaze B2 — run in thread pool to avoid blocking the event loop
+            from app.b2 import upload_b2_file_from_path, get_item_path, get_user_b2_prefix
+            import functools
+            path = await get_item_path(item, str(current_user.id))
+            prefix = await get_user_b2_prefix(str(current_user.id))
+            b2_key = f"{prefix}/{path}"
+
+            # upload_b2_file_from_path is synchronous (boto3); offload to executor so
+            # other concurrent uploads / requests are not blocked while it runs.
+            loop = asyncio.get_event_loop()
+            success = await loop.run_in_executor(
+                None,
+                functools.partial(upload_b2_file_from_path, merged_file_path, b2_key)
+            )
+            if not success:
+                logger.error(f"B2 upload from path failed for {filename}")
+
+            return _to_response(item)
+
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": f"Failed during merge or upload: {str(e)}"}
+            )
+        finally:
+            # Clean up temp files
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            await clean_upload_lock(uploadId)

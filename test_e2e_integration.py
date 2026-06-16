@@ -32,7 +32,8 @@ async def main():
         data = resp.json()
         token = data["token"]
         user_id = data["user"]["id"]
-        print(f"   Registered user {user_id}")
+        b2_prefix = f"E2E-{user_id[-4:]}"
+        print(f"   Registered user {user_id}, B2 prefix: {b2_prefix}")
         
         headers = {"Authorization": f"Bearer {token}"}
         
@@ -41,12 +42,12 @@ async def main():
         
         # Clear seeded B2 objects to start from a clean state for user
         print("   Clearing B2 items to start fresh...")
-        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{user_id}/")
+        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{b2_prefix}/")
         for obj in res.get("Contents", []):
             b2_client.delete_object(Bucket=settings.B2_BUCKET, Key=obj["Key"])
             
         # Re-create root keep
-        b2_client.put_object(Bucket=settings.B2_BUCKET, Key=f"{user_id}/.keep", Body=b"")
+        b2_client.put_object(Bucket=settings.B2_BUCKET, Key=f"{b2_prefix}/.keep", Body=b"")
         
         # 2. Create Folder
         print("2. Creating folder 'TestFolder' via API...")
@@ -55,10 +56,10 @@ async def main():
         folder_id = resp.json()["id"]
         
         # Check B2
-        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{user_id}/")
+        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{b2_prefix}/")
         keys = [obj["Key"] for obj in res.get("Contents", [])]
         print(f"   B2 Keys: {keys}")
-        assert f"{user_id}/TestFolder/.keep" in keys
+        assert f"{b2_prefix}/TestFolder/.keep" in keys
         
         # 3. Upload File
         print("3. Uploading file 'hello.txt' inside 'TestFolder' via API...")
@@ -69,13 +70,13 @@ async def main():
         file_id = resp.json()["id"]
         
         # Check B2
-        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{user_id}/")
+        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{b2_prefix}/")
         keys = [obj["Key"] for obj in res.get("Contents", [])]
         print(f"   B2 Keys: {keys}")
-        assert f"{user_id}/TestFolder/hello.txt" in keys
+        assert f"{b2_prefix}/TestFolder/hello.txt" in keys
         
         # Verify file contents in B2
-        obj_res = b2_client.get_object(Bucket=settings.B2_BUCKET, Key=f"{user_id}/TestFolder/hello.txt")
+        obj_res = b2_client.get_object(Bucket=settings.B2_BUCKET, Key=f"{b2_prefix}/TestFolder/hello.txt")
         body = obj_res["Body"].read()
         print(f"   File Content in B2: '{body.decode()}'")
         assert body == file_content
@@ -86,12 +87,12 @@ async def main():
         assert resp.status_code == 200
         
         # Check B2 (wait a bit for the operation to propagate if needed, though it is synchronous)
-        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{user_id}/")
+        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{b2_prefix}/")
         keys = [obj["Key"] for obj in res.get("Contents", [])]
         print(f"   B2 Keys: {keys}")
-        assert f"{user_id}/RenamedFolder/.keep" in keys
-        assert f"{user_id}/RenamedFolder/hello.txt" in keys
-        assert f"{user_id}/TestFolder/hello.txt" not in keys
+        assert f"{b2_prefix}/RenamedFolder/.keep" in keys
+        assert f"{b2_prefix}/RenamedFolder/hello.txt" in keys
+        assert f"{b2_prefix}/TestFolder/hello.txt" not in keys
         
         # 5. Move File
         print("5. Creating folder 'DestFolder' and moving 'hello.txt' into it...")
@@ -103,11 +104,11 @@ async def main():
         assert resp.status_code == 200
         
         # Check B2
-        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{user_id}/")
+        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{b2_prefix}/")
         keys = [obj["Key"] for obj in res.get("Contents", [])]
         print(f"   B2 Keys: {keys}")
-        assert f"{user_id}/DestFolder/hello.txt" in keys
-        assert f"{user_id}/RenamedFolder/hello.txt" not in keys
+        assert f"{b2_prefix}/DestFolder/hello.txt" in keys
+        assert f"{b2_prefix}/RenamedFolder/hello.txt" not in keys
         
         # 6. Delete Folder (hard-delete)
         print("6. Soft-deleting 'RenamedFolder' then permanently deleting it...")
@@ -120,11 +121,11 @@ async def main():
         assert resp.status_code == 200
         
         # Check B2
-        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{user_id}/")
+        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{b2_prefix}/")
         keys = [obj["Key"] for obj in res.get("Contents", [])]
         print(f"   B2 Keys: {keys}")
-        assert f"{user_id}/RenamedFolder/.keep" not in keys
-        assert f"{user_id}/RenamedFolder/hello.txt" not in keys
+        assert f"{b2_prefix}/RenamedFolder/.keep" not in keys
+        assert f"{b2_prefix}/RenamedFolder/hello.txt" not in keys
         
         # Clean up database test user and items
         print("7. Cleaning up test user and remaining files in DB...")
@@ -138,7 +139,7 @@ async def main():
             
         # Clean up remaining B2 objects
         print("8. Cleaning up B2 bucket...")
-        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{user_id}/")
+        res = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{b2_prefix}/")
         for obj in res.get("Contents", []):
             b2_client.delete_object(Bucket=settings.B2_BUCKET, Key=obj["Key"])
             

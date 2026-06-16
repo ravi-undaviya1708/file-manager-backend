@@ -24,7 +24,7 @@ async def main():
     
     print(f"Registering user: {email}...")
     
-    async with httpx.AsyncClient(base_url="http://localhost:8000") as client:
+    async with httpx.AsyncClient(base_url="http://localhost:8000", timeout=30.0) as client:
         # Register user
         register_payload = {
             "email": email,
@@ -38,7 +38,8 @@ async def main():
         
         reg_data = response.json()
         user_id = reg_data["user"]["id"]
-        print(f"Registered successfully! User ID: {user_id}")
+        b2_prefix = f"Test-{user_id[-4:]}"
+        print(f"Registered successfully! User ID: {user_id}, B2 Prefix: {b2_prefix}")
         
         # Wait a few seconds for background tasks to complete the sync
         print("Waiting 5 seconds for background tasks to complete B2 sync...")
@@ -53,7 +54,7 @@ async def main():
         # Verify B2 objects
         print("Verifying objects in Backblaze B2...")
         b2_client = get_b2_client()
-        b2_response = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{user_id}/")
+        b2_response = b2_client.list_objects_v2(Bucket=settings.B2_BUCKET, Prefix=f"{b2_prefix}/")
         contents = b2_response.get("Contents", [])
         print(f"Found {len(contents)} objects in the B2 bucket for user {user_id}:")
         for obj in contents:
