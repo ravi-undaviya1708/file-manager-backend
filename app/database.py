@@ -16,11 +16,11 @@ database = client[settings.MONGODB_DB_NAME]
 
 async def init_db() -> None:
     """Initialize Beanie ODM with document models."""
-    from app.models import FileSystemItem
+    from app.models import FileSystemItem, User
 
     await init_beanie(
         database=database,
-        document_models=[FileSystemItem],
+        document_models=[FileSystemItem, User],
     )
 
 

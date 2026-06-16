@@ -1,15 +1,18 @@
-"""API router for file/folder operations (MongoDB/Beanie).
+"""API router for file/folder operations (MongoDB/Beanie) secured with JWT authentication.
 
 All routes are prefixed with /api to match the frontend's axios calls.
 """
 
 from __future__ import annotations
 
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
+
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
 from app import crud
+from app.auth import get_current_user
+from app.models import User
 from app.schemas import (
     CreateFolderRequest,
     ErrorResponse,
@@ -18,6 +21,7 @@ from app.schemas import (
     MoveItemRequest,
     RenameItemRequest,
 )
+
 
 router = APIRouter(prefix="/api", tags=["File Manager"])
 
@@ -47,9 +51,9 @@ def _to_response(item) -> FileSystemItemResponse:
     response_model=List[FileSystemItemResponse],
     summary="List all file system items",
 )
-async def list_items():
-    """Return every file and folder (the frontend handles tree-building client-side)."""
-    items = await crud.get_all_items()
+async def list_items(current_user: User = Depends(get_current_user)):
+    """Return every file and folder for the authenticated user."""
+    items = await crud.get_all_items(str(current_user.id))
     return [_to_response(item) for item in items]
 
 
@@ -63,7 +67,10 @@ async def list_items():
     summary="Create a new folder",
     responses={400: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def create_folder(body: CreateFolderRequest):
+async def create_folder(
+    body: CreateFolderRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Create a new folder in the given parent directory."""
     if body.type != "folder":
         raise HTTPException(
@@ -71,9 +78,9 @@ async def create_folder(body: CreateFolderRequest):
             detail={"error": "Only folder creation is supported via this endpoint."},
         )
 
-    # Validate parent exists (if specified)
+    # Validate parent exists (if specified) and belongs to user
     if body.parentId:
-        parent = await crud.get_item_by_id(body.parentId)
+        parent = await crud.get_item_by_id(body.parentId, str(current_user.id))
         if not parent:
             raise HTTPException(
                 status_code=400,
@@ -81,13 +88,19 @@ async def create_folder(body: CreateFolderRequest):
             )
 
     # Check duplicate name
-    if await crud.check_duplicate_name(body.name, body.parentId, "folder"):
+    if await crud.check_duplicate_name(body.name, body.parentId, "folder", str(current_user.id)):
         raise HTTPException(
             status_code=409,
             detail={"error": f'A folder named "{body.name}" already exists here.'},
         )
 
-    item = await crud.create_item(body.name, "folder", body.parentId)
+    item = await crud.create_item(body.name, "folder", str(current_user.id), body.parentId)
+
+    # Sync folder creation to Backblaze B2
+    from app.b2 import create_b2_folder, get_item_path
+    path = await get_item_path(item, str(current_user.id))
+    create_b2_folder(f"{current_user.id}/{path}")
+
     return _to_response(item)
 
 
@@ -100,9 +113,12 @@ async def create_folder(body: CreateFolderRequest):
     summary="Get a single item by ID",
     responses={404: {"model": ErrorResponse}},
 )
-async def get_item(item_id: str):
+async def get_item(
+    item_id: str,
+    current_user: User = Depends(get_current_user),
+):
     """Retrieve a specific file or folder by its ID."""
-    item = await crud.get_item_by_id(item_id)
+    item = await crud.get_item_by_id(item_id, str(current_user.id))
     if not item:
         raise HTTPException(status_code=404, detail={"error": "Item not found."})
     return _to_response(item)
@@ -117,15 +133,19 @@ async def get_item(item_id: str):
     summary="Rename a file or folder",
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def rename_item(item_id: str, body: RenameItemRequest):
+async def rename_item(
+    item_id: str,
+    body: RenameItemRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Rename an existing file or folder."""
-    item = await crud.get_item_by_id(item_id)
+    item = await crud.get_item_by_id(item_id, str(current_user.id))
     if not item:
         raise HTTPException(status_code=404, detail={"error": "Item not found."})
 
     # Check duplicate name in same parent
     if await crud.check_duplicate_name(
-        body.name, item.parent_id, item.type, exclude_id=item_id
+        body.name, item.parent_id, item.type, str(current_user.id), exclude_id=item_id
     ):
         raise HTTPException(
             status_code=409,
@@ -134,7 +154,13 @@ async def rename_item(item_id: str, body: RenameItemRequest):
             },
         )
 
+    old_name = item.name
     updated = await crud.rename_item(item, body.name)
+
+    # Sync renaming to Backblaze B2
+    from app.b2 import handle_b2_rename
+    await handle_b2_rename(updated, str(current_user.id), old_name)
+
     return _to_response(updated)
 
 
@@ -147,9 +173,13 @@ async def rename_item(item_id: str, body: RenameItemRequest):
     summary="Move item to a different folder",
     responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
 )
-async def move_item(item_id: str, body: MoveItemRequest):
+async def move_item(
+    item_id: str,
+    body: MoveItemRequest,
+    current_user: User = Depends(get_current_user),
+):
     """Move a file or folder to a new parent directory."""
-    item = await crud.get_item_by_id(item_id)
+    item = await crud.get_item_by_id(item_id, str(current_user.id))
     if not item:
         raise HTTPException(status_code=404, detail={"error": "Item not found."})
 
@@ -159,9 +189,9 @@ async def move_item(item_id: str, body: MoveItemRequest):
             detail={"error": "Cannot move an item into itself."},
         )
 
-    # Validate target parent exists
+    # Validate target parent exists and belongs to user
     if body.targetParentId:
-        target = await crud.get_item_by_id(body.targetParentId)
+        target = await crud.get_item_by_id(body.targetParentId, str(current_user.id))
         if not target:
             raise HTTPException(
                 status_code=400,
@@ -173,7 +203,13 @@ async def move_item(item_id: str, body: MoveItemRequest):
                 detail={"error": "Target must be a folder."},
             )
 
+    old_parent_id = item.parent_id
     updated = await crud.move_item(item, body.targetParentId)
+
+    # Sync moving to Backblaze B2
+    from app.b2 import handle_b2_move
+    await handle_b2_move(updated, str(current_user.id), old_parent_id)
+
     return _to_response(updated)
 
 
@@ -186,9 +222,12 @@ async def move_item(item_id: str, body: MoveItemRequest):
     summary="Toggle starred status",
     responses={404: {"model": ErrorResponse}},
 )
-async def toggle_star(item_id: str):
+async def toggle_star(
+    item_id: str,
+    current_user: User = Depends(get_current_user),
+):
     """Toggle the starred flag on a file or folder."""
-    item = await crud.get_item_by_id(item_id)
+    item = await crud.get_item_by_id(item_id, str(current_user.id))
     if not item:
         raise HTTPException(status_code=404, detail={"error": "Item not found."})
 
@@ -205,22 +244,30 @@ async def toggle_star(item_id: str):
     summary="Delete an item (soft-delete or permanent)",
     responses={404: {"model": ErrorResponse}},
 )
-async def delete_item(item_id: str, permanent: bool = False):
-    """
-    Soft-delete an item (move to bin) by default.
+async def delete_item(
+    item_id: str,
+    permanent: bool = False,
+    current_user: User = Depends(get_current_user),
+):
+    """Soft-delete an item (move to bin) by default.
+
     Pass `?permanent=true` to permanently delete an item already in the bin.
     """
-    item = await crud.get_item_by_id(item_id)
+    item = await crud.get_item_by_id(item_id, str(current_user.id))
     if not item:
         raise HTTPException(status_code=404, detail={"error": "Item not found."})
 
     if permanent or item.is_deleted:
-        deleted_ids = await crud.hard_delete_item(item_id)
+        # Sync hard-delete to Backblaze B2 (call before DB hard-deletion to traverse parent hierarchy)
+        from app.b2 import handle_b2_delete
+        await handle_b2_delete(item, str(current_user.id))
+
+        deleted_ids = await crud.hard_delete_item(item_id, str(current_user.id))
         return MessageResponse(
             message=f"Permanently deleted {len(deleted_ids)} item(s)."
         )
     else:
-        deleted_ids = await crud.soft_delete_item(item_id)
+        deleted_ids = await crud.soft_delete_item(item_id, str(current_user.id))
         return MessageResponse(
             message=f"Moved {len(deleted_ids)} item(s) to bin."
         )
@@ -235,9 +282,12 @@ async def delete_item(item_id: str, permanent: bool = False):
     summary="Restore a soft-deleted item from bin",
     responses={404: {"model": ErrorResponse}},
 )
-async def restore_item(item_id: str):
+async def restore_item(
+    item_id: str,
+    current_user: User = Depends(get_current_user),
+):
     """Restore a soft-deleted item and all its children from the bin."""
-    item = await crud.get_item_by_id(item_id)
+    item = await crud.get_item_by_id(item_id, str(current_user.id))
     if not item:
         raise HTTPException(status_code=404, detail={"error": "Item not found."})
 
@@ -247,7 +297,7 @@ async def restore_item(item_id: str):
             detail={"error": "Item is not in the bin."},
         )
 
-    restored_ids = await crud.restore_item(item_id)
+    restored_ids = await crud.restore_item(item_id, str(current_user.id))
     return MessageResponse(message=f"Restored {len(restored_ids)} item(s).")
 
 
@@ -261,13 +311,17 @@ async def restore_item(item_id: str):
     summary="Duplicate an item",
     responses={404: {"model": ErrorResponse}},
 )
-async def duplicate_item(item_id: str, targetParentId: Optional[str] = None):
+async def duplicate_item(
+    item_id: str,
+    targetParentId: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
     """Create a copy of a file or folder with a 'copy' suffix."""
-    item = await crud.get_item_by_id(item_id)
+    item = await crud.get_item_by_id(item_id, str(current_user.id))
     if not item:
         raise HTTPException(status_code=404, detail={"error": "Item not found."})
 
-    new_item = await crud.duplicate_item(item, targetParentId)
+    new_item = await crud.duplicate_item(item, str(current_user.id), targetParentId)
     return _to_response(new_item)
 
 
@@ -284,6 +338,7 @@ async def duplicate_item(item_id: str, targetParentId: Optional[str] = None):
 async def upload_file(
     file: UploadFile = File(...),
     parentId: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload a file to the specified parent folder."""
     if not file.filename:
@@ -291,20 +346,26 @@ async def upload_file(
             status_code=400, detail={"error": "Filename is required."}
         )
 
-    # Validate parent exists
+    # Validate parent exists and belongs to user
     if parentId:
-        parent = await crud.get_item_by_id(parentId)
+        parent = await crud.get_item_by_id(parentId, str(current_user.id))
         if not parent:
             raise HTTPException(
                 status_code=400,
                 detail={"error": f"Parent folder '{parentId}' not found."},
             )
 
-    # Read file to get size (in production you'd save to GridFS/cloud storage)
+    # Read file to get size
     content = await file.read()
     file_size = len(content)
 
     item = await crud.create_item(
-        file.filename, "file", parentId, size=file_size
+        file.filename, "file", str(current_user.id), parentId, size=file_size
     )
+
+    # Sync file upload to Backblaze B2
+    from app.b2 import upload_b2_file, get_item_path
+    path = await get_item_path(item, str(current_user.id))
+    upload_b2_file(f"{current_user.id}/{path}", content)
+
     return _to_response(item)

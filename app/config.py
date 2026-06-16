@@ -15,6 +15,16 @@ class Settings(BaseSettings):
     MONGODB_DB_NAME: str = "file_manager"
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:3001"
     APP_ENV: str = "development"
+    JWT_SECRET_KEY: str = "supersecretkeyforlocaldevelopmentfilestoreapp"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days in minutes
+    GOOGLE_CLIENT_ID: str = ""
+    
+    # Backblaze B2 Storage Configuration
+    B2_KEY_ID: str = ""
+    B2_APPLICATION_KEY: str = ""
+    B2_BUCKET: str = ""
+    B2_ENDPOINT: str = ""
 
     @property
     def cors_origins_list(self) -> List[str]:

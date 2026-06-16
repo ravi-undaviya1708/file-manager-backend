@@ -43,9 +43,16 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 | Variable          | Description                    | Default                      |
 | ----------------- | ------------------------------ | ---------------------------- |
 | `MONGODB_URL`     | MongoDB connection string      | `mongodb://localhost:27017`  |
-| `MONGODB_DB_NAME` | Database name                  | `file_manager`               |
+| `MONGODB_DB_NAME` | Database name                  | `mongo_db_name`               |
 | `CORS_ORIGINS`    | Comma-separated allowed origins| `http://localhost:3000,...`   |
 | `APP_ENV`         | Environment (`development`)    | `development`                |
+| `JWT_SECRET_KEY`    | JWT signing secret key         | `jwtsecratekey` |
+| `JWT_ALGORITHM`     | JWT signing algorithm          | `HS256`                      |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Access token expiration    | `10080`                      |
+| `B2_KEY_ID`         | Backblaze b2 key id            | `b2-key-id`      |
+| `B2_APPLICATION_KEY`| Backblaze b2 application key   | `b2-application-key`|
+| `B2_BUCKET`         | Backblaze b2 bucket            | `b2-bucket`            |
+| `B2_ENDPOINT`       | Backblaze b2 endpoint          | `b2-endpoint`|
 
 ## API Endpoints
 

@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.database import init_db, close_db
 from app.routes import router
+from app.auth_routes import router as auth_router
 from app.seed import seed_database
 
 settings = get_settings()
@@ -43,6 +44,7 @@ app.add_middleware(
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+app.include_router(auth_router)
 app.include_router(router)
 
 

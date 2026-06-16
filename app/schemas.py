@@ -102,3 +102,40 @@ class ErrorResponse(BaseModel):
     """Error detail response."""
 
     error: str
+
+
+# ── Auth Schemas ──────────────────────────────────────────────────────────────
+
+
+from pydantic import EmailStr
+
+
+class UserRegisterRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255, description="Full Name")
+    email: EmailStr = Field(..., description="User Email Address")
+    password: str = Field(..., min_length=6, description="Password (min 6 characters)")
+
+
+class UserLoginRequest(BaseModel):
+    email: EmailStr = Field(..., description="User Email Address")
+    password: str = Field(..., description="User Password")
+
+
+class GoogleLoginRequest(BaseModel):
+    credential: str = Field(..., description="Google ID Token JWT credential")
+
+
+class UserResponse(BaseModel):
+    id: str
+    name: str
+    email: str
+    avatarUrl: Optional[str] = None
+    createdAt: str
+
+    model_config = {"from_attributes": True}
+
+
+class AuthTokenResponse(BaseModel):
+    token: str
+    user: UserResponse
+

@@ -138,3 +138,43 @@ async def seed_database() -> None:
 
     total = len(SEED_DATA) + len(CHILD_ITEMS) + len(GRANDCHILD_ITEMS)
     print(f"✓ Seeded MongoDB with {total} items.")
+
+
+async def seed_user_data(user_id: str) -> None:
+    """Insert default files/folders for a newly registered user."""
+    # Prevent duplicate seeding
+    count = await FileSystemItem.find({"user_id": user_id}).count()
+    if count > 0:
+        return
+
+    # Insert root folders
+    root_map = {}
+    for data in SEED_DATA:
+        item_data = data.copy()
+        item_data["user_id"] = user_id
+        item = FileSystemItem(**item_data)
+        await item.insert()
+        root_map[item.name] = str(item.id)
+
+    # Insert child items (lookup parent ID by name)
+    child_map = {}
+    for data in CHILD_ITEMS:
+        item_data = data.copy()
+        parent_name = item_data.pop("parent_name")
+        parent_id = root_map.get(parent_name)
+        item_data["parent_id"] = parent_id
+        item_data["user_id"] = user_id
+        item = FileSystemItem(**item_data)
+        await item.insert()
+        child_map[item.name] = str(item.id)
+
+    # Insert grandchild items
+    for data in GRANDCHILD_ITEMS:
+        item_data = data.copy()
+        parent_name = item_data.pop("parent_name")
+        parent_id = child_map.get(parent_name) or root_map.get(parent_name)
+        item_data["parent_id"] = parent_id
+        item_data["user_id"] = user_id
+        item = FileSystemItem(**item_data)
+        await item.insert()
+
