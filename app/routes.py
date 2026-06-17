@@ -348,7 +348,14 @@ async def duplicate_item(
     if not item:
         raise HTTPException(status_code=404, detail={"error": "Item not found."})
 
-    new_item = await crud.duplicate_item(item, str(current_user.id), targetParentId)
+    if targetParentId is not None:
+        use_target = True
+        actual_parent = None if targetParentId in ("root", "null") else targetParentId
+    else:
+        use_target = False
+        actual_parent = None
+
+    new_item = await crud.duplicate_item(item, str(current_user.id), actual_parent, use_target)
     return _to_response(new_item)
 
 

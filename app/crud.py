@@ -146,11 +146,11 @@ async def restore_item(item_id: str, user_id: str) -> List[str]:
 
 
 async def duplicate_item(
-    item: FileSystemItem, user_id: str, target_parent_id: Optional[str] = None
+    item: FileSystemItem, user_id: str, target_parent_id: Optional[str] = None, use_target_parent: bool = False
 ) -> FileSystemItem:
     """Duplicate an item with a 'copy' suffix."""
     base_name = re.sub(r" copy(?: \d+)?$", "", item.name)
-    parent_id = target_parent_id if target_parent_id is not None else item.parent_id
+    parent_id = target_parent_id if use_target_parent else item.parent_id
 
     # Count existing copies in the same directory
     existing_copies = await FileSystemItem.find(
