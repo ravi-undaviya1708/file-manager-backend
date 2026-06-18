@@ -47,6 +47,9 @@ class FileSystemItem(Document):
     size: Optional[int] = Field(default=None)
     starred: bool = Field(default=False)
     is_deleted: bool = Field(default=False)
+    is_locked: bool = Field(default=False)
+    lock_password_hash: Optional[str] = Field(default=None)
+    is_hidden: bool = Field(default=False)
 
     class Settings:
         name = "file_system_items"

@@ -27,6 +27,8 @@ class FileSystemItemResponse(BaseModel):
     size: Optional[int] = None
     starred: bool = False
     isDeleted: bool = False
+    isLocked: bool = False
+    isHidden: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -40,6 +42,12 @@ class CreateFolderRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Folder name")
     parentId: Optional[str] = Field(None, description="Parent folder ID, null for root")
     type: ItemType = Field(ItemType.folder, description="Must be 'folder'")
+
+
+class LockFolderRequest(BaseModel):
+    """Request schema to lock a folder."""
+
+    password: str = Field(..., min_length=4, description="Folder password")
 
 
 class RenameItemRequest(BaseModel):

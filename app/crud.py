@@ -193,3 +193,9 @@ async def _collect_descendant_ids(root_id: str, user_id: str) -> List[str]:
             queue.append(child_id)
 
     return ids
+
+
+async def get_user_storage_size(user_id: str) -> int:
+    """Calculate the total size in bytes of all files for a user (including soft-deleted)."""
+    items = await FileSystemItem.find({"user_id": user_id, "type": "file"}).to_list()
+    return sum(item.size or 0 for item in items)
