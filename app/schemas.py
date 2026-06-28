@@ -16,6 +16,15 @@ class ItemType(str, Enum):
 # ── Response Schemas ──────────────────────────────────────────────────────────
 
 
+class ItemShareResponse(BaseModel):
+    """Schema for sharing metadata of an item."""
+    userId: str
+    email: str
+    permission: str  # "viewer" or "editor"
+
+    model_config = {"from_attributes": True}
+
+
 class FileSystemItemResponse(BaseModel):
     """Schema returned to the frontend — matches the TypeScript FileSystemItem interface."""
 
@@ -29,11 +38,21 @@ class FileSystemItemResponse(BaseModel):
     isDeleted: bool = False
     isLocked: bool = False
     isHidden: bool = False
+    shares: Optional[List[ItemShareResponse]] = None
+    ownerId: Optional[str] = None
+    ownerEmail: Optional[str] = None
+    partitionId: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
 
 # ── Request Schemas ───────────────────────────────────────────────────────────
+
+
+class ShareItemRequest(BaseModel):
+    """Request to share a folder or file."""
+    email: str
+    permission: str = Field(..., pattern="^(viewer|editor)$")
 
 
 class CreateFolderRequest(BaseModel):
@@ -42,6 +61,7 @@ class CreateFolderRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Folder name")
     parentId: Optional[str] = Field(None, description="Parent folder ID, null for root")
     type: ItemType = Field(ItemType.folder, description="Must be 'folder'")
+    partitionId: Optional[str] = Field(None, description="Optional partition ID")
 
 
 class LockFolderRequest(BaseModel):
@@ -139,6 +159,9 @@ class UserResponse(BaseModel):
     email: str
     avatarUrl: Optional[str] = None
     createdAt: str
+    isAdmin: bool = False
+    storageLimitBytes: int = 10200547328
+    pricingPlan: str = "free"
 
     model_config = {"from_attributes": True}
 
@@ -146,4 +169,25 @@ class UserResponse(BaseModel):
 class AuthTokenResponse(BaseModel):
     token: str
     user: UserResponse
+
+
+class PartitionResponse(BaseModel):
+    id: str
+    name: str
+    allocatedSizeBytes: int
+    usedSizeBytes: int
+    createdAt: str
+    isLocked: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+class CreatePartitionRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    allocatedSizeBytes: int = Field(..., gt=0)
+
+
+class ResizePartitionRequest(BaseModel):
+    name: Optional[str] = None
+    allocatedSizeBytes: Optional[int] = Field(None, gt=0)
 

@@ -34,6 +34,9 @@ def _to_user_response(user: User) -> UserResponse:
         email=user.email,
         avatarUrl=user.avatar_url,
         createdAt=user.created_at.isoformat() if user.created_at else "",
+        isAdmin=user.is_admin,
+        storageLimitBytes=user.storage_limit_bytes,
+        pricingPlan=user.pricing_plan,
     )
 
 

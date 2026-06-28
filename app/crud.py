@@ -53,6 +53,7 @@ async def create_item(
     user_id: str,
     parent_id: Optional[str] = None,
     size: Optional[int] = None,
+    partition_id: Optional[str] = None,
 ) -> FileSystemItem:
     """Create a new file system item for the user."""
     item = FileSystemItem(
@@ -63,6 +64,7 @@ async def create_item(
         size=size,
         starred=False,
         is_deleted=False,
+        partition_id=partition_id,
     )
     await item.insert()
     return item
@@ -80,7 +82,21 @@ async def move_item(
 ) -> FileSystemItem:
     """Move an item to a different parent folder."""
     item.parent_id = target_parent_id
+    
+    # Update partition_id based on target parent folder
+    new_partition_id = None
+    if target_parent_id:
+        parent = await FileSystemItem.get(target_parent_id)
+        if parent:
+            new_partition_id = parent.partition_id
+            
+    item.partition_id = new_partition_id
     await item.save()
+    
+    # Recursively update partitions of all children if folder
+    if item.type == "folder":
+        await _update_descendant_partitions(str(item.id), str(item.user_id), new_partition_id)
+        
     return item
 
 
@@ -199,3 +215,67 @@ async def get_user_storage_size(user_id: str) -> int:
     """Calculate the total size in bytes of all files for a user (including soft-deleted)."""
     items = await FileSystemItem.find({"user_id": user_id, "type": "file"}).to_list()
     return sum(item.size or 0 for item in items)
+
+
+async def _update_descendant_partitions(root_id: str, user_id: str, new_partition_id: Optional[str]) -> None:
+    """Recursively update the partition ID for all descendant items."""
+    descendant_ids = await _collect_descendant_ids(root_id, user_id)
+    query_ids = []
+    for aid in descendant_ids:
+        try:
+            query_ids.append(PydanticObjectId(aid))
+        except Exception:
+            query_ids.append(aid)
+            
+    await FileSystemItem.find(
+        {"_id": {"$in": query_ids}, "user_id": user_id}
+    ).update_many({"$set": {"partition_id": new_partition_id}})
+
+
+async def get_accessible_items(user_id: str, email: str) -> List[FileSystemItem]:
+    """Retrieve all items owned by or shared with the specified user (recursively)."""
+    # 1. Get all items owned by the user
+    owned_items = await FileSystemItem.find(FileSystemItem.user_id == user_id).to_list()
+    
+    # 2. Get all items directly shared with the user (by user_id or email)
+    shared_roots = await FileSystemItem.find({
+        "shares.user_id": user_id,
+        "is_deleted": False
+    }).to_list()
+    
+    shared_roots_by_email = await FileSystemItem.find({
+        "shares.email": email.lower(),
+        "is_deleted": False
+    }).to_list()
+    
+    # Merge direct shared roots
+    all_shared_roots = {str(item.id): item for item in (shared_roots + shared_roots_by_email)}
+    
+    # 3. For each shared root, fetch all descendants recursively
+    descendant_items = []
+    visited_descendants = set()
+    queue = [str(item.id) for item in all_shared_roots.values() if item.type == "folder"]
+    
+    while queue:
+        current_folder_id = queue.pop(0)
+        children = await FileSystemItem.find({
+            "parent_id": current_folder_id,
+            "is_deleted": False
+        }).to_list()
+        
+        for child in children:
+            child_id = str(child.id)
+            if child_id not in visited_descendants:
+                visited_descendants.add(child_id)
+                descendant_items.append(child)
+                if child.type == "folder":
+                    queue.append(child_id)
+                    
+    # Combine all items
+    all_items = {str(item.id): item for item in owned_items}
+    for item in all_shared_roots.values():
+        all_items[str(item.id)] = item
+    for item in descendant_items:
+        all_items[str(item.id)] = item
+        
+    return list(all_items.values())

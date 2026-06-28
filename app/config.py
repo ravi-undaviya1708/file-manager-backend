@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days in minutes
     GOOGLE_CLIENT_ID: str = ""
     
+    # Razorpay Payments Configuration
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+    
     # Backblaze B2 Storage Configuration
     B2_KEY_ID: str = ""
     B2_APPLICATION_KEY: str = ""

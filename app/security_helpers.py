@@ -121,3 +121,69 @@ async def is_lineage_blocked(
         current_id = current_item.parent_id
 
     return False
+
+
+async def get_effective_sharing_permission(item: FileSystemItem, user) -> Optional[str]:
+    """Walk up ancestry to find user's permission level ("owner", "editor", "viewer", or None)."""
+    if not item or not user:
+        return None
+
+    if item.user_id == str(user.id):
+        return "owner"
+
+    current = item
+    visited = set()
+
+    while current:
+        current_id = str(current.id)
+        if current_id in visited:
+            break
+        visited.add(current_id)
+
+        # Check shares list
+        shares_list = getattr(current, "shares", []) or []
+        for share in shares_list:
+            if share.user_id == str(user.id) or share.email.lower() == user.email.lower():
+                return share.permission  # "viewer" or "editor"
+
+        if current.user_id == str(user.id):
+            return "owner"
+
+        parent_id = current.parent_id
+        if not parent_id:
+            break
+
+        # Query parent (database-wide, bypass isolation)
+        parent_item = await FileSystemItem.get(parent_id)
+        if not parent_item:
+            break
+        current = parent_item
+
+    return None
+
+
+async def verify_read_access(item: FileSystemItem, user):
+    """Verify user has read/view access to item. Raises 404/403 if not."""
+    from fastapi import HTTPException
+    perm = await get_effective_sharing_permission(item, user)
+    if perm is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Item not found or access denied."}
+        )
+
+
+async def verify_write_access(item: FileSystemItem, user):
+    """Verify user has write/edit access to item. Raises 404/403 if not."""
+    from fastapi import HTTPException
+    perm = await get_effective_sharing_permission(item, user)
+    if perm is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Item not found or access denied."}
+        )
+    if perm == "viewer":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Access denied. You only have viewer permission for this shared item."}
+        )
