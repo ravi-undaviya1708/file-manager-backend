@@ -121,7 +121,8 @@ async def edit_user_limit(
             detail={"error": "Storage limit cannot be negative."}
         )
         
-    await user.update({"$set": {"storage_limit_bytes": body.limitBytes}})
+    user.storage_limit_bytes = body.limitBytes
+    await user.save()
     return MessageResponse(
         message=f"Storage limit for user {user.email} updated to {body.limitBytes} bytes."
     )
@@ -156,7 +157,8 @@ async def edit_user_role(
             detail={"error": "You cannot revoke your own administrator privileges."}
         )
         
-    await user.update({"$set": {"is_admin": body.isAdmin}})
+    user.is_admin = body.isAdmin
+    await user.save()
     role_str = "administrator" if body.isAdmin else "standard user"
     return MessageResponse(
         message=f"Role status for user {user.email} updated to {role_str}."
