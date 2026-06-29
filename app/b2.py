@@ -26,6 +26,24 @@ def get_b2_client():
     )
 
 
+def generate_presigned_url(key: str, expires_in: int = 3600) -> str:
+    """Generate a presigned URL to share a B2 object."""
+    try:
+        client = get_b2_client()
+        url = client.generate_presigned_url(
+            ClientMethod='get_object',
+            Params={
+                'Bucket': settings.B2_BUCKET,
+                'Key': key
+            },
+            ExpiresIn=expires_in
+        )
+        return url
+    except Exception as e:
+        logger.error(f"B2 Error: Failed to generate presigned URL for '{key}': {e}")
+        return ""
+
+
 async def get_item_path(item: FileSystemItem, user_id: str) -> str:
     """Recursively resolve the full directory path for a database item."""
     parts = []

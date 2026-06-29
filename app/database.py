@@ -10,13 +10,16 @@ from app.config import get_settings
 settings = get_settings()
 
 # Motor client (created once, reused across the app)
-client = AsyncIOMotorClient(settings.MONGODB_URL)
-database = client[settings.MONGODB_DB_NAME]
-
+client = None
+database = None
 
 async def init_db() -> None:
     """Initialize Beanie ODM with document models."""
     from app.models import FileSystemItem, User, StoragePartition
+    global client, database
+
+    client = AsyncIOMotorClient(settings.MONGODB_URL)
+    database = client[settings.MONGODB_DB_NAME]
 
     await init_beanie(
         database=database,
@@ -26,4 +29,5 @@ async def init_db() -> None:
 
 async def close_db() -> None:
     """Close the MongoDB connection."""
-    client.close()
+    if client:
+        client.close()
