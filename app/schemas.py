@@ -162,6 +162,8 @@ class UserResponse(BaseModel):
     isAdmin: bool = False
     storageLimitBytes: int = 10200547328
     pricingPlan: str = "free"
+    userType: str = "individual"
+
 
     model_config = {"from_attributes": True}
 

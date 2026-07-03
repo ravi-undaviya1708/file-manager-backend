@@ -24,6 +24,7 @@ class User(Document):
     is_admin: bool = Field(default=False)
     storage_limit_bytes: int = Field(default=10200547328)  # 9.5 GB
     pricing_plan: str = Field(default="free")
+    user_type: str = Field(default="individual")
 
     class Settings:
         name = "users"
@@ -34,6 +35,26 @@ class User(Document):
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email}, name={self.name})>"
+
+
+class Role(Document):
+    """Represents a custom or default security role in the application.
+
+    Stored as a document in the 'roles' MongoDB collection.
+    """
+
+    name: str = Field(..., max_length=255)
+    key: str = Field(..., unique=True)
+    is_default: bool = Field(default=False)
+    description: str = Field(default="")
+    permissions: List[str] = Field(default_factory=list)
+
+    class Settings:
+        name = "roles"
+
+    def __repr__(self) -> str:
+        return f"<Role(name={self.name}, key={self.key})>"
+
 
 
 class ItemShare(BaseModel):

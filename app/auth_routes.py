@@ -49,6 +49,7 @@ def _to_user_response(user: User) -> UserResponse:
         isAdmin=user.is_admin,
         storageLimitBytes=user.storage_limit_bytes,
         pricingPlan=user.pricing_plan,
+        userType=user.user_type,
     )
 
 

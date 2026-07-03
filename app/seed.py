@@ -107,11 +107,61 @@ GRANDCHILD_ITEMS = [
 ]
 
 
+async def seed_roles() -> None:
+    """Seed default system roles if they do not exist in the database."""
+    from app.models import Role
+    default_roles = [
+        {
+            "name": "Super Admin",
+            "key": "superAdmin",
+            "is_default": True,
+            "description": "System owner with full administrative and role configuration access.",
+            "permissions": ["view_telemetry", "manage_all_users", "manage_roles", "delete_users"]
+        },
+        {
+            "name": "Admin",
+            "key": "admin",
+            "is_default": True,
+            "description": "Organizational admin who can manage team members and assign custom roles.",
+            "permissions": ["manage_team_users", "delete_users"]
+        },
+        {
+            "name": "Individual User",
+            "key": "individual",
+            "is_default": True,
+            "description": "Standard individual user managing their own storage and partitions.",
+            "permissions": ["manage_self"]
+        }
+    ]
+    for r_data in default_roles:
+        existing = await Role.find_one(Role.key == r_data["key"])
+        if not existing:
+            await Role(**r_data).insert()
+
+
 async def seed_database() -> None:
     """Insert seed data if the database is empty."""
+    # 1. Seed default system roles
+    await seed_roles()
+
+    # 2. Ensure testraj@yopmail.com has superAdmin role
+    from app.models import User
+    super_admin_user = await User.find_one(User.email == "testraj@yopmail.com")
+    if super_admin_user:
+        needs_save = False
+        if super_admin_user.user_type != "superAdmin":
+            super_admin_user.user_type = "superAdmin"
+            needs_save = True
+        if not super_admin_user.is_admin:
+            super_admin_user.is_admin = True
+            needs_save = True
+        if needs_save:
+            await super_admin_user.save()
+
     count = await FileSystemItem.count()
     if count > 0:
         return  # Database already has data
+
 
     # Insert root folders
     root_map = {}

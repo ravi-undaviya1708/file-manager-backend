@@ -8,7 +8,7 @@ from pydantic import BaseModel, EmailStr
 
 from app.auth import get_current_user
 from app.models import User, FileSystemItem, StoragePartition
-from app.database import database
+import app.database
 
 router = APIRouter(prefix="/api/admin", tags=["Super Admin"])
 
@@ -25,6 +25,7 @@ class AdminUserResponse(BaseModel):
     createdAt: str
     totalFiles: int
     spaceUsed: int
+    userType: str
 
 
 class EditLimitRequest(BaseModel):
@@ -32,11 +33,33 @@ class EditLimitRequest(BaseModel):
 
 
 class EditRoleRequest(BaseModel):
-    isAdmin: bool
+    userType: str
 
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class RoleResponse(BaseModel):
+    name: str
+    key: str
+    isDefault: bool
+    description: str
+    permissions: List[str]
+
+
+class CreateRoleRequest(BaseModel):
+    name: str
+    key: str
+    description: str = ""
+    permissions: List[str] = []
+
+
+class UpdateRoleRequest(BaseModel):
+    name: str
+    description: str = ""
+    permissions: List[str] = []
+
 
 
 # ── Dependency ────────────────────────────────────────────────────────────────
@@ -85,7 +108,8 @@ async def list_users(admin: User = Depends(admin_required)):
                 pricingPlan=u.pricing_plan,
                 createdAt=u.created_at.isoformat() if u.created_at else "",
                 totalFiles=total_files,
-                spaceUsed=space_used
+                spaceUsed=space_used,
+                userType=u.user_type
             )
         )
         
@@ -131,15 +155,16 @@ async def edit_user_limit(
 @router.put(
     "/users/{user_id}/role",
     response_model=MessageResponse,
-    summary="Toggle user admin role status"
+    summary="Change user role/type status"
 )
 async def edit_user_role(
     user_id: str,
     body: EditRoleRequest,
     admin: User = Depends(admin_required)
 ):
-    """Grant or revoke administrative privileges for a user."""
+    """Change the security role/user type for a user."""
     from beanie import PydanticObjectId
+    from app.models import Role
     try:
         user = await User.get(PydanticObjectId(user_id))
     except Exception:
@@ -154,15 +179,32 @@ async def edit_user_role(
     if str(user.id) == str(admin.id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "You cannot revoke your own administrator privileges."}
+            detail={"error": "You cannot change your own administrator role privileges."}
         )
         
-    user.is_admin = body.isAdmin
+    # Check if role exists
+    role_exists = await Role.find_one(Role.key == body.userType)
+    if not role_exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": f"Role '{body.userType}' does not exist in the database."}
+        )
+
+    # Validate that non-superAdmins cannot assign the superAdmin role
+    if body.userType == "superAdmin" and admin.user_type != "superAdmin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Only Super Admins can assign the Super Admin role."}
+        )
+
+    user.user_type = body.userType
+    user.is_admin = body.userType in ["superAdmin", "admin"]
     await user.save()
-    role_str = "administrator" if body.isAdmin else "standard user"
+    
     return MessageResponse(
-        message=f"Role status for user {user.email} updated to {role_str}."
+        message=f"Role status for user {user.email} updated to {role_exists.name}."
     )
+
 
 
 @router.delete(
@@ -222,7 +264,7 @@ async def delete_user(
 async def get_db_stats(admin: User = Depends(admin_required)):
     """Fetch raw database level statistics directly from the MongoDB engine."""
     try:
-        stats = await database.command("dbStats")
+        stats = await app.database.database.command("dbStats")
         # Extract/return key indicators safely
         return {
             "db": stats.get("db", ""),
@@ -240,3 +282,185 @@ async def get_db_stats(admin: User = Depends(admin_required)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to execute dbStats query: {str(e)}"}
         )
+
+
+# ── Role Management Routes ──────────────────────────────────────────────────
+
+@router.get(
+    "/roles",
+    response_model=List[RoleResponse],
+    summary="List all security roles"
+)
+async def list_roles(admin: User = Depends(admin_required)):
+    """Retrieve details of all roles. Filter out superAdmin for standard Admins."""
+    from app.models import Role
+    roles = await Role.find_all().to_list()
+    
+    # Filter out superAdmin if the logged-in user is not superAdmin
+    if admin.user_type != "superAdmin":
+        roles = [r for r in roles if r.key != "superAdmin"]
+        
+    return [
+        RoleResponse(
+            name=r.name,
+            key=r.key,
+            isDefault=r.is_default,
+            description=r.description,
+            permissions=r.permissions
+        ) for r in roles
+    ]
+
+
+@router.post(
+    "/roles",
+    response_model=RoleResponse,
+    summary="Create a custom role"
+)
+async def create_role(
+    body: CreateRoleRequest,
+    admin: User = Depends(admin_required)
+):
+    """Create a new custom user role."""
+    from app.models import Role
+    
+    existing = await Role.find_one(Role.key == body.key)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": f"Role key '{body.key}' already exists."}
+        )
+        
+    if body.key in ["superAdmin", "admin", "individual"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Cannot create a custom role with a default system key name."}
+        )
+
+    # Validate that standard Admins cannot create roles with manage_roles privileges
+    if admin.user_type != "superAdmin" and "manage_roles" in body.permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Standard Admins cannot create roles with manage_roles permissions."}
+        )
+
+    new_role = Role(
+        name=body.name,
+        key=body.key,
+        is_default=False,
+        description=body.description,
+        permissions=body.permissions
+    )
+    await new_role.insert()
+    
+    return RoleResponse(
+        name=new_role.name,
+        key=new_role.key,
+        isDefault=new_role.is_default,
+        description=new_role.description,
+        permissions=new_role.permissions
+    )
+
+
+@router.put(
+    "/roles/{key}",
+    response_model=RoleResponse,
+    summary="Update a role"
+)
+async def update_role(
+    key: str,
+    body: UpdateRoleRequest,
+    admin: User = Depends(admin_required)
+):
+    """Update custom or default role details."""
+    from app.models import Role
+    
+    role = await Role.find_one(Role.key == key)
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "Role not found."}
+        )
+        
+    # Standard admins cannot modify superAdmin role
+    if key == "superAdmin" and admin.user_type != "superAdmin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Only Super Admins can modify the Super Admin role."}
+        )
+
+    # Admins cannot modify default Admin role permissions.
+    if key == "admin" and admin.user_type != "superAdmin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Admins cannot change permissions of the default system Admin role."}
+        )
+
+    # Standard Admins cannot escalate a role's permissions to "manage_roles"
+    if admin.user_type != "superAdmin" and "manage_roles" in body.permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Standard Admins cannot assign manage_roles permission."}
+        )
+
+    # Update role properties
+    role.name = body.name
+    role.description = body.description
+    
+    # Default roles keep their permissions or can only be edited by Super Admin
+    if not role.is_default or admin.user_type == "superAdmin":
+        role.permissions = body.permissions
+        
+    await role.save()
+    
+    return RoleResponse(
+        name=role.name,
+        key=role.key,
+        isDefault=role.is_default,
+        description=role.description,
+        permissions=role.permissions
+    )
+
+
+@router.delete(
+    "/roles/{key}",
+    response_model=MessageResponse,
+    summary="Delete a custom role"
+)
+async def delete_role(
+    key: str,
+    admin: User = Depends(admin_required)
+):
+    """Delete a custom role. Default system roles cannot be deleted."""
+    from app.models import Role, User
+    
+    role = await Role.find_one(Role.key == key)
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "Role not found."}
+        )
+        
+    if role.is_default:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Default system roles cannot be deleted."}
+        )
+        
+    # Prevent standard Admins from deleting roles that require superAdmin permissions
+    if admin.user_type != "superAdmin" and "manage_roles" in role.permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Standard Admins cannot delete roles containing manage_roles permissions."}
+        )
+
+    # Before deleting, check if any user is currently assigned this role
+    assigned_users_count = await User.find(User.user_type == key).count()
+    if assigned_users_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": f"Cannot delete role. There are {assigned_users_count} user(s) currently assigned to this role."}
+        )
+
+    await role.delete()
+    return MessageResponse(message=f"Custom role '{role.name}' has been deleted.")
+
