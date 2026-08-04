@@ -1,5 +1,14 @@
 """FastAPI application entry point."""
 
+# Force IPv4-only resolution to prevent slow IPv6 connection hangs on macOS local networks
+import socket
+orig_getaddrinfo = socket.getaddrinfo
+
+def getaddrinfo_ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
+    return orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+socket.getaddrinfo = getaddrinfo_ipv4_only
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI

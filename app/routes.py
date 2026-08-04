@@ -5,7 +5,7 @@ All routes are prefixed with /api to match the frontend's axios calls.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Request
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Request, BackgroundTasks
 
 from typing import List, Optional
 
@@ -106,11 +106,12 @@ async def _to_response_async(item) -> FileSystemItemResponse:
 )
 async def list_items(
     request: Request,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user)
 ):
     """Return every file and folder accessible to the authenticated user, filtering out locked sub-items."""
     from app.b2 import sync_b2_to_mongodb
-    await sync_b2_to_mongodb(str(current_user.id))
+    background_tasks.add_task(sync_b2_to_mongodb, str(current_user.id))
     # Fetch owned and shared items recursively
     items = await crud.get_accessible_items(str(current_user.id), current_user.email)
 
@@ -208,10 +209,10 @@ async def create_folder(
     item = await crud.create_item(body.name, "folder", owner_id, body.parentId, partition_id=partition_id)
 
     # Sync folder creation to Backblaze B2 using owner_id
-    from app.b2 import create_b2_folder, get_item_path, get_user_b2_prefix
+    from app.b2 import create_b2_folder_async, get_item_path, get_user_b2_prefix
     path = await get_item_path(item, owner_id)
     prefix = await get_user_b2_prefix(owner_id)
-    create_b2_folder(f"{prefix}/{path}")
+    await create_b2_folder_async(f"{prefix}/{path}")
 
     return await _to_response_async(item)
 
@@ -642,27 +643,28 @@ async def view_file(
     if not content_type:
         content_type = "application/octet-stream"
         
-    s3 = get_b2_client()
     from app.config import get_settings
     settings = get_settings()
     
-    try:
-        response = s3.get_object(Bucket=settings.B2_BUCKET, Key=key)
-        
-        from fastapi.responses import StreamingResponse
-        def iterfile():
+    from fastapi.responses import StreamingResponse
+    def iterfile():
+        try:
+            s3 = get_b2_client()
+            response = s3.get_object(Bucket=settings.B2_BUCKET, Key=key)
             for chunk in response["Body"].iter_chunks(chunk_size=128 * 1024):
                 yield chunk
-                
-        return StreamingResponse(
-            iterfile(),
-            media_type=content_type,
-            headers={
-                "Content-Disposition": f"inline; filename={item.name}"
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=404, detail={"error": f"File content not found: {str(e)}"})
+        except Exception as err:
+            import logging
+            logger = logging.getLogger("b2")
+            logger.error(f"Error streaming file from B2: {err}")
+            
+    return StreamingResponse(
+        iterfile(),
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f"inline; filename={item.name}"
+        }
+    )
 
 
 # ── File Upload ───────────────────────────────────────────────────────────────
@@ -753,10 +755,10 @@ async def upload_file(
     )
 
     # Sync file upload to Backblaze B2 using owner_id
-    from app.b2 import upload_b2_file, get_item_path, get_user_b2_prefix
+    from app.b2 import upload_b2_file_async, get_item_path, get_user_b2_prefix
     path = await get_item_path(item, owner_id)
     prefix = await get_user_b2_prefix(owner_id)
-    upload_b2_file(f"{prefix}/{path}", content)
+    await upload_b2_file_async(f"{prefix}/{path}", content)
 
     return await _to_response_async(item)
 

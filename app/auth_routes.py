@@ -245,11 +245,16 @@ async def update_profile(
 
         file_bytes = await avatar.read()
         try:
-            b2.put_object(
-                Bucket=settings.B2_BUCKET,
-                Key=filename,
-                Body=file_bytes,
-                ContentType=avatar.content_type,
+            import anyio
+            import functools
+            await anyio.to_thread.run_sync(
+                functools.partial(
+                    b2.put_object,
+                    Bucket=settings.B2_BUCKET,
+                    Key=filename,
+                    Body=file_bytes,
+                    ContentType=avatar.content_type
+                )
             )
             # Construct raw B2 URL
             b2_url = f"https://f005.backblazeb2.com/file/{settings.B2_BUCKET}/{filename}"

@@ -15,15 +15,76 @@ logger = logging.getLogger("b2")
 settings = get_settings()
 
 
+_b2_client = None
+
+
 def get_b2_client():
-    """Create S3 client configured for Backblaze B2 S3-compatible API."""
-    return boto3.client(
-        "s3",
-        endpoint_url=settings.B2_ENDPOINT,
-        aws_access_key_id=settings.B2_KEY_ID,
-        aws_secret_access_key=settings.B2_APPLICATION_KEY,
-        config=Config(signature_version="s3v4"),
-    )
+    """Create S3 client configured for Backblaze B2 S3-compatible API (cached)."""
+    global _b2_client
+    if _b2_client is None:
+        _b2_client = boto3.client(
+            "s3",
+            endpoint_url=settings.B2_ENDPOINT,
+            aws_access_key_id=settings.B2_KEY_ID,
+            aws_secret_access_key=settings.B2_APPLICATION_KEY,
+            config=Config(signature_version="s3v4"),
+        )
+    return _b2_client
+
+
+async def create_b2_object_async(key: str, body: bytes = b"") -> bool:
+    """Upload or create a raw object/placeholder in Backblaze B2 asynchronously."""
+    import anyio
+    return await anyio.to_thread.run_sync(create_b2_object, key, body)
+
+
+async def delete_b2_object_async(key: str) -> bool:
+    """Delete an object from Backblaze B2 asynchronously."""
+    import anyio
+    return await anyio.to_thread.run_sync(delete_b2_object, key)
+
+
+async def rename_b2_object_async(old_key: str, new_key: str) -> bool:
+    """Rename an object in B2 asynchronously."""
+    import anyio
+    return await anyio.to_thread.run_sync(rename_b2_object, old_key, new_key)
+
+
+async def move_b2_prefix_async(old_prefix: str, new_prefix: str) -> bool:
+    """Recursively move all files under a prefix in B2 asynchronously."""
+    import anyio
+    return await anyio.to_thread.run_sync(move_b2_prefix, old_prefix, new_prefix)
+
+
+async def create_b2_folder_async(folder_path: str) -> bool:
+    """Create a folder placeholder in B2 asynchronously."""
+    return await create_b2_object_async(f"{folder_path}/.keep", b"")
+
+
+async def upload_b2_file_async(file_path: str, content: bytes) -> bool:
+    """Upload a file to B2 asynchronously."""
+    return await create_b2_object_async(file_path, content)
+
+
+def check_b2_object_exists(key: str) -> bool:
+    """Synchronously check if a B2 object exists by making a head_object request."""
+    try:
+        client = get_b2_client()
+        client.head_object(Bucket=settings.B2_BUCKET, Key=key)
+        return True
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "404":
+            logger.error(f"B2 Error checking root key '{key}': {e}")
+        return False
+    except Exception as e:
+        logger.error(f"B2 Error checking root key '{key}': {e}")
+        return False
+
+
+async def check_b2_object_exists_async(key: str) -> bool:
+    """Asynchronously check if a B2 object exists."""
+    import anyio
+    return await anyio.to_thread.run_sync(check_b2_object_exists, key)
 
 
 def generate_presigned_url(key: str, expires_in: int = 3600) -> str:
@@ -223,9 +284,9 @@ async def handle_b2_rename(item: FileSystemItem, user_id: str, old_name: str):
     new_key = f"{prefix}/{new_path}"
     
     if item.type == "folder":
-        move_b2_prefix(f"{old_key}/", f"{new_key}/")
+        await move_b2_prefix_async(f"{old_key}/", f"{new_key}/")
     else:
-        rename_b2_object(old_key, new_key)
+        await rename_b2_object_async(old_key, new_key)
 
 
 async def handle_b2_move(item: FileSystemItem, user_id: str, old_parent_id: Optional[str]):
@@ -241,9 +302,9 @@ async def handle_b2_move(item: FileSystemItem, user_id: str, old_parent_id: Opti
     new_key = f"{prefix}/{new_path}"
     
     if item.type == "folder":
-        move_b2_prefix(f"{old_key}/", f"{new_key}/")
+        await move_b2_prefix_async(f"{old_key}/", f"{new_key}/")
     else:
-        rename_b2_object(old_key, new_key)
+        await rename_b2_object_async(old_key, new_key)
 
 
 def delete_b2_prefix_versions(prefix: str) -> bool:
@@ -301,45 +362,45 @@ async def handle_b2_delete(item: FileSystemItem, user_id: str):
     
     if item.type == "folder":
         folder_prefix = f"{key}/"
-        try:
-            client = get_b2_client()
-            paginator = client.get_paginator("list_objects_v2")
-            pages = paginator.paginate(Bucket=settings.B2_BUCKET, Prefix=folder_prefix)
-            
-            for page in pages:
-                for obj in page.get("Contents", []):
-                    delete_b2_object(obj["Key"])
-            # Delete folder placeholder keep file
-            delete_b2_object(f"{key}/.keep")
-        except Exception as e:
-            logger.error(f"B2 Error: Failed to list/delete items under prefix '{folder_prefix}': {e}")
+        
+        def delete_folder_contents():
+            try:
+                client = get_b2_client()
+                paginator = client.get_paginator("list_objects_v2")
+                pages = paginator.paginate(Bucket=settings.B2_BUCKET, Prefix=folder_prefix)
+                
+                for page in pages:
+                    for obj in page.get("Contents", []):
+                        delete_b2_object(obj["Key"])
+                # Delete folder placeholder keep file
+                delete_b2_object(f"{key}/.keep")
+            except Exception as e:
+                logger.error(f"B2 Error: Failed to list/delete items under prefix '{folder_prefix}': {e}")
+
+        import anyio
+        await anyio.to_thread.run_sync(delete_folder_contents)
     else:
-        delete_b2_object(key)
+        await delete_b2_object_async(key)
 
 
 # ─── Retroactive Sync on Login ───
 
 async def check_and_sync_user(user_id: str):
     """Verify if user's root folder exists in B2, if not run a full retroactive sync from DB."""
-    client = get_b2_client()
     prefix = await get_user_b2_prefix(user_id)
     root_key = f"{prefix}/.keep"
     
-    try:
-        client.head_object(Bucket=settings.B2_BUCKET, Key=root_key)
+    exists = await check_b2_object_exists_async(root_key)
+    if exists:
         # Root folder exists, sync already completed
         logger.info(f"B2: Root folder for user '{user_id}' already exists. Sync skipped.")
         return
-    except ClientError as e:
-        if e.response["Error"]["Code"] != "404":
-            logger.error(f"B2 Error checking root key '{root_key}': {e}")
-            return
             
     # Key doesn't exist (404), run full sync
     logger.info(f"B2: Starting retroactive sync for user '{user_id}'...")
     
     # 1. Create root folder keep file
-    create_b2_object(root_key, b"")
+    await create_b2_object_async(root_key, b"")
     
     # 2. Fetch all MongoDB items for this user
     items = await FileSystemItem.find(FileSystemItem.user_id == user_id).to_list()
@@ -352,7 +413,7 @@ async def check_and_sync_user(user_id: str):
             
             if item.type == "folder":
                 # Create folder keep file
-                create_b2_object(f"{key}/.keep", b"")
+                await create_b2_object_async(f"{key}/.keep", b"")
             else:
                 # Create mock file placeholder content detailing size/origin
                 meta = (
@@ -361,7 +422,7 @@ async def check_and_sync_user(user_id: str):
                     f"Original Size: {item.size or 0} bytes\n"
                     f"Created: {item.created_at.isoformat() if item.created_at else ''}\n"
                 ).encode("utf-8")
-                create_b2_object(key, meta)
+                await create_b2_object_async(key, meta)
         except Exception as err:
             logger.error(f"B2 Error: Sync failed for item '{item.name}' ({item.id}): {err}")
             
@@ -369,6 +430,42 @@ async def check_and_sync_user(user_id: str):
 
 
 # ─── 2-Way Synchronization on Refresh ───
+
+def fetch_b2_state(prefix: str):
+    """Fetch files and folders structure from B2 under prefix (synchronous, blocking)."""
+    client = get_b2_client()
+    paginator = client.get_paginator("list_objects_v2")
+    pages = paginator.paginate(Bucket=settings.B2_BUCKET, Prefix=f"{prefix}/")
+    
+    b2_folders = set()
+    b2_files = {}
+    
+    for page in pages:
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            rel_path = key[len(prefix):].lstrip("/")
+            if not rel_path:
+                continue
+            
+            if rel_path.endswith("/.keep") or rel_path == ".keep":
+                folder_path = rel_path[:-6] if rel_path.endswith("/.keep") else ""
+                if folder_path:
+                    b2_folders.add(folder_path)
+            else:
+                b2_files[rel_path] = {
+                    "size": obj.get("Size", 0),
+                    "last_modified": obj.get("LastModified"),
+                }
+    
+    # Infer implied folders from files
+    for file_path in list(b2_files.keys()):
+        parts = file_path.split("/")
+        for i in range(1, len(parts)):
+            implied_folder = "/".join(parts[:i])
+            b2_folders.add(implied_folder)
+            
+    return b2_folders, b2_files
+
 
 async def sync_b2_to_mongodb(user_id: str):
     """Synchronize Backblaze B2 state with MongoDB.
@@ -381,39 +478,10 @@ async def sync_b2_to_mongodb(user_id: str):
     """
     logger.info(f"B2: Starting 2-way sync for user '{user_id}'...")
     prefix = await get_user_b2_prefix(user_id)
-    client = get_b2_client()
     
     try:
-        paginator = client.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=settings.B2_BUCKET, Prefix=f"{prefix}/")
-        
-        b2_folders = set()
-        b2_files = {}
-        
-        for page in pages:
-            for obj in page.get("Contents", []):
-                key = obj["Key"]
-                rel_path = key[len(prefix):].lstrip("/")
-                if not rel_path:
-                    continue
-                
-                if rel_path.endswith("/.keep") or rel_path == ".keep":
-                    folder_path = rel_path[:-6] if rel_path.endswith("/.keep") else ""
-                    if folder_path:
-                        b2_folders.add(folder_path)
-                else:
-                    b2_files[rel_path] = {
-                        "size": obj.get("Size", 0),
-                        "last_modified": obj.get("LastModified"),
-                    }
-        
-        # Infer implied folders from files
-        for file_path in list(b2_files.keys()):
-            parts = file_path.split("/")
-            for i in range(1, len(parts)):
-                implied_folder = "/".join(parts[:i])
-                b2_folders.add(implied_folder)
-                
+        import anyio
+        b2_folders, b2_files = await anyio.to_thread.run_sync(fetch_b2_state, prefix)
     except Exception as e:
         logger.error(f"B2 Error listing objects for user '{user_id}': {e}")
         return
