@@ -18,7 +18,6 @@ from app.models import User
 settings = get_settings()
 security = HTTPBearer()
 
-
 def hash_password(password: str) -> str:
     """Hash a plain text password using bcrypt."""
     salt = bcrypt.gensalt()
