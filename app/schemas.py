@@ -193,3 +193,8 @@ class ResizePartitionRequest(BaseModel):
     name: Optional[str] = None
     allocatedSizeBytes: Optional[int] = Field(None, gt=0)
 
+
+class UpdateFileContentRequest(BaseModel):
+    content: str = Field(..., max_length=5242880, description="Updated file text content (5MB max)")
+
+
