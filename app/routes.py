@@ -22,6 +22,7 @@ from app.schemas import (
     RenameItemRequest,
     LockFolderRequest,
     ItemShareResponse,
+    UpdateFileContentRequest,
 )
 import logging
 import tempfile
@@ -1267,3 +1268,152 @@ async def revoke_item_share(
     await item.save()
 
     return MessageResponse(message="Sharing permissions revoked successfully.")
+
+
+@router.put(
+    "/files/{file_id}/content",
+    summary="Update raw text file content in Backblaze B2",
+    responses={400: {"model": ErrorResponse}, 403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
+async def update_file_content(
+    file_id: str,
+    body: UpdateFileContentRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    """Securely overwrite raw text content of a file in Backblaze B2."""
+    from datetime import datetime, timezone
+    from app.security_helpers import verify_write_access, is_access_blocked, get_unlocked_passwords
+    from app.b2 import get_user_b2_prefix, get_item_path, upload_b2_file_async
+
+    item = await FileSystemItem.get(file_id)
+    if not item or item.type != "file":
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "File not found"}
+        )
+
+    # 1. Verify user has write access (owner or editor permission)
+    await verify_write_access(item, current_user)
+
+    owner_id = item.user_id if item.user_id else str(current_user.id)
+
+    # 2. Check if access is blocked by locked folders
+    unlocked_passwords = get_unlocked_passwords(request)
+    if await is_access_blocked(item, owner_id, unlocked_passwords):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Access to locked folder content denied."}
+        )
+
+    # 3. Content validations
+    content_bytes = body.content.encode("utf-8")
+    if len(content_bytes) > 5242880:  # 5MB limit
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "File content exceeds maximum allowed size of 5MB."}
+        )
+
+    # 4. Resolve path and key in B2
+    prefix = await get_user_b2_prefix(owner_id)
+    path = await get_item_path(item, owner_id)
+    key = f"{prefix}/{path}"
+
+    # 5. Upload to B2
+    success = await upload_b2_file_async(key, content_bytes)
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to upload file content to Backblaze B2."}
+        )
+
+    # 6. Update database record with new size
+    item.size = len(content_bytes)
+    await item.save()
+
+    return {
+        "success": True,
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+        "size": item.size,
+    }
+
+
+@router.get(
+    "/folders/{folder_id}/children",
+    response_model=List[FileSystemItemResponse],
+    summary="Get direct children of a folder (files + subfolders)",
+    responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
+async def get_folder_children(
+    folder_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    """Retrieve direct children of a folder, checking credentials for locked bounds."""
+    from app.security_helpers import verify_read_access, is_access_blocked, get_unlocked_passwords
+
+    unlocked_passwords = get_unlocked_passwords(request)
+
+    if folder_id == "root":
+        # Get accessible items at the root level (parent_id is None or empty string)
+        # We can fetch accessible items first
+        all_accessible = await crud.get_accessible_items(str(current_user.id), current_user.email)
+        root_items = [
+            item for item in all_accessible
+            if (item.parent_id is None or item.parent_id == "" or item.parent_id == "root")
+            and not item.is_deleted
+        ]
+        
+        # Check lineage locks (for root, it has no parents, but let's be safe)
+        filtered_items = []
+        for item in root_items:
+            owner_id = item.user_id if item.user_id else str(current_user.id)
+            if getattr(item, "is_locked", False):
+                # If a root folder is locked, we still show the folder itself in children list
+                pass
+            filtered_items.append(item)
+            
+        items = filtered_items
+    else:
+        # Fetch target folder
+        folder = await FileSystemItem.get(folder_id)
+        if not folder or folder.type != "folder":
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "Folder not found"}
+            )
+
+        # Verify access
+        await verify_read_access(folder, current_user)
+
+        owner_id = folder.user_id if folder.user_id else str(current_user.id)
+        if await is_access_blocked(folder, owner_id, unlocked_passwords):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Access to locked folder denied."}
+            )
+
+        # Get direct children
+        items = await FileSystemItem.find({
+            "parent_id": folder_id,
+            "is_deleted": False
+        }).to_list()
+
+    # Pre-populate user email map for fast response serialization
+    user_ids = {item.user_id for item in items if item.user_id}
+    user_email_map = {}
+    if user_ids:
+        from beanie import PydanticObjectId
+        object_ids = [PydanticObjectId(uid) for uid in user_ids if len(uid) == 24]
+        if object_ids:
+            users_obj = await User.find({"_id": {"$in": object_ids}}).to_list()
+            for u in users_obj:
+                user_email_map[str(u.id)] = u.email
+        str_ids = [uid for uid in user_ids if len(uid) != 24]
+        if str_ids:
+            users_str = await User.find({"_id": {"$in": str_ids}}).to_list()
+            for u in users_str:
+                user_email_map[str(u.id)] = u.email
+
+    return [_to_response(item, user_email_map) for item in items]
+
