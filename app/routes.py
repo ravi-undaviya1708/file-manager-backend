@@ -432,6 +432,10 @@ async def delete_item(
     """
     item = await FileSystemItem.get(item_id)
     if not item:
+        if permanent:
+            return MessageResponse(
+                message="Item already permanently deleted."
+            )
         raise HTTPException(status_code=404, detail={"error": "Item not found."})
 
     from app.security_helpers import verify_write_access
@@ -464,7 +468,33 @@ async def delete_item(
         )
 
 
+# ── Empty Bin ─────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/folders/empty-bin",
+    response_model=MessageResponse,
+    summary="Permanently delete all items in bin for the current user",
+)
+@router.delete(
+    "/folders/empty-bin",
+    response_model=MessageResponse,
+    summary="Permanently delete all items in bin for the current user",
+)
+async def empty_bin_endpoint(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    """Empty the recycle bin for the current user."""
+    user_id = str(current_user.id)
+    deleted_count = await crud.empty_bin(user_id)
+    return MessageResponse(
+        message=f"Permanently deleted {deleted_count} item(s) from recycle bin."
+    )
+
+
 # ── Restore ───────────────────────────────────────────────────────────────────
+
 
 
 @router.patch(
