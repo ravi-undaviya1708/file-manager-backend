@@ -143,6 +143,34 @@ async def hard_delete_item(item_id: str, user_id: str) -> List[str]:
     return affected_ids
 
 
+async def empty_bin(user_id: str) -> int:
+    """Permanently delete all items in bin for a user and clean up Backblaze B2."""
+    bin_items = await FileSystemItem.find(
+        {"user_id": user_id, "is_deleted": True}
+    ).to_list()
+
+    if not bin_items:
+        return 0
+
+    # Sync B2 deletes
+    try:
+        from app.b2 import handle_b2_delete
+        for item in bin_items:
+            try:
+                await handle_b2_delete(item, user_id)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    await FileSystemItem.find(
+        {"user_id": user_id, "is_deleted": True}
+    ).delete()
+
+    return len(bin_items)
+
+
+
 async def restore_item(item_id: str, user_id: str) -> List[str]:
     """Restore a soft-deleted item and all its descendants."""
     affected_ids = await _collect_descendant_ids(item_id, user_id)
