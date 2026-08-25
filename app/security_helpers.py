@@ -6,7 +6,7 @@ from typing import Dict, Optional
 from fastapi import Request
 
 from app.auth import verify_password
-from app.models import FileSystemItem
+from app.models import FileSystemItem, User
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ async def is_lineage_blocked(
     if not item.parent_id:
         return False
 
-    current_id = item.parent_id
+    current_id: Optional[str] = item.parent_id
     visited = set()
 
     while current_id:
@@ -103,6 +103,7 @@ async def is_lineage_blocked(
         visited.add(current_id)
 
         # Fetch current ancestor
+        current_item: Optional[FileSystemItem] = None
         if items_by_id and current_id in items_by_id:
             current_item = items_by_id[current_id]
         else:
@@ -123,7 +124,7 @@ async def is_lineage_blocked(
     return False
 
 
-async def get_effective_sharing_permission(item: FileSystemItem, user) -> Optional[str]:
+async def get_effective_sharing_permission(item: FileSystemItem, user: User) -> Optional[str]:
     """Walk up ancestry to find user's permission level ("owner", "editor", "viewer", or None)."""
     if not item or not user:
         return None
@@ -162,7 +163,7 @@ async def get_effective_sharing_permission(item: FileSystemItem, user) -> Option
     return None
 
 
-async def verify_read_access(item: FileSystemItem, user):
+async def verify_read_access(item: FileSystemItem, user: User):
     """Verify user has read/view access to item. Raises 404/403 if not."""
     from fastapi import HTTPException
     perm = await get_effective_sharing_permission(item, user)
@@ -173,7 +174,7 @@ async def verify_read_access(item: FileSystemItem, user):
         )
 
 
-async def verify_write_access(item: FileSystemItem, user):
+async def verify_write_access(item: FileSystemItem, user: User):
     """Verify user has write/edit access to item. Raises 404/403 if not."""
     from fastapi import HTTPException
     perm = await get_effective_sharing_permission(item, user)

@@ -20,9 +20,16 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days in minutes
     GOOGLE_CLIENT_ID: str = ""
     
-    # Razorpay Payments Configuration
+    # Razorpay Payments Configuration (Legacy)
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
+    
+    # Cashfree Payments Configuration
+    CASHFREE_APP_ID: str = ""
+    CASHFREE_SECRET_KEY: str = ""
+    CASHFREE_ENV: str = "SANDBOX"
+    CASHFREE_MODE: str = ""
+    CASHFREE_API_VERSION: str = "2023-08-01"
     
     # Backblaze B2 Storage Configuration
     B2_KEY_ID: str = ""
@@ -34,7 +41,7 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 @lru_cache

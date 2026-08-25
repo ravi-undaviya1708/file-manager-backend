@@ -22,6 +22,7 @@ from app.schemas import (
     ErrorResponse,
 )
 from app.seed import seed_user_data
+import anyio, functools
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
@@ -40,6 +41,16 @@ def _to_user_response(user: User) -> UserResponse:
             if presigned:
                 avatar_url = presigned
 
+    from datetime import datetime, timezone
+    days_remaining = 0
+    trial_exp = getattr(user, "trial_expires_at", None)
+    if trial_exp:
+        if trial_exp.tzinfo is None:
+            trial_exp = trial_exp.replace(tzinfo=timezone.utc)
+        import math
+        delta = trial_exp - datetime.now(timezone.utc)
+        days_remaining = max(0, math.ceil(delta.total_seconds() / 86400))
+
     return UserResponse(
         id=str(user.id),
         name=user.name,
@@ -50,6 +61,11 @@ def _to_user_response(user: User) -> UserResponse:
         storageLimitBytes=user.storage_limit_bytes,
         pricingPlan=user.pricing_plan,
         userType=user.user_type,
+        trialExpiresAt=user.trial_expires_at.isoformat() if getattr(user, "trial_expires_at", None) else None,
+        subscriptionStatus=getattr(user, "subscription_status", "trial"),
+        subscriptionExpiresAt=user.subscription_expires_at.isoformat() if getattr(user, "subscription_expires_at", None) else None,
+        billingCycle=getattr(user, "billing_cycle", None),
+        daysRemainingInTrial=days_remaining
     )
 
 
@@ -72,12 +88,20 @@ async def register(body: UserRegisterRequest, background_tasks: BackgroundTasks)
 
     # Hash password and create user
     hashed = hash_password(body.password)
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    trial_expires = now + timedelta(days=10)
     user = User(
         email=body.email.lower(),
         hashed_password=hashed,
         name=body.name.strip(),
         google_id=None,
         avatar_url=f"https://api.dicebear.com/7.x/initials/svg?seed={body.name.strip()}",
+        storage_limit_bytes=16106127360,
+        trial_started_at=now,
+        trial_expires_at=trial_expires,
+        subscription_status="trial",
+        pricing_plan="free",
     )
     await user.insert()
 
@@ -159,12 +183,20 @@ async def login_with_google(body: GoogleLoginRequest, background_tasks: Backgrou
     is_new = False
     if not user:
         # Create a new Google user
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        trial_expires = now + timedelta(days=10)
         user = User(
             email=email,
             hashed_password=None,
             name=name,
             google_id=google_id,
             avatar_url=picture,
+            storage_limit_bytes=16106127360,
+            trial_started_at=now,
+            trial_expires_at=trial_expires,
+            subscription_status="trial",
+            pricing_plan="free",
         )
         await user.insert()
         is_new = True
@@ -178,7 +210,8 @@ async def login_with_google(body: GoogleLoginRequest, background_tasks: Backgrou
 
         if updates:
             await user.update({"$set": updates})
-            user = await User.get(user.id)
+            for key, val in updates.items():
+                setattr(user, key, val)
 
     # Seed files if user is brand new
     if is_new:
@@ -245,8 +278,8 @@ async def update_profile(
 
         file_bytes = await avatar.read()
         try:
-            import anyio
-            import functools
+            # import anyio
+            # import functools
             await anyio.to_thread.run_sync(
                 functools.partial(
                     b2.put_object,
@@ -264,8 +297,8 @@ async def update_profile(
 
     if updates:
         await current_user.update({"$set": updates})
-        # Refresh current_user from DB
-        current_user = await User.get(current_user.id)
+        for key, val in updates.items():
+            setattr(current_user, key, val)
 
     # Return a new token and user response (since frontend expects {token, user})
     token = create_access_token(data={"sub": str(current_user.id)})

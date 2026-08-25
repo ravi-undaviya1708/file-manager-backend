@@ -50,7 +50,7 @@ async def check_duplicate_name(
 async def create_item(
     name: str,
     item_type: str,
-    user_id: str,
+    user_id: Optional[str],
     parent_id: Optional[str] = None,
     size: Optional[int] = None,
     partition_id: Optional[str] = None,

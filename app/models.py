@@ -15,16 +15,21 @@ class User(Document):
     Stored as a document in the 'users' MongoDB collection.
     """
 
-    email: EmailStr = Field(..., unique=True)
+    email: EmailStr = Field(unique=True)  # type: ignore
     hashed_password: Optional[str] = Field(default=None)
-    name: str = Field(..., max_length=255)
+    name: str = Field(max_length=255)
     google_id: Optional[str] = Field(default=None)
     avatar_url: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_admin: bool = Field(default=False)
-    storage_limit_bytes: int = Field(default=10200547328)  # 9.5 GB
+    storage_limit_bytes: int = Field(default=16106127360)  # 15 GB
     pricing_plan: str = Field(default="free")
     user_type: str = Field(default="individual")
+    trial_started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    trial_expires_at: Optional[datetime] = Field(default=None)
+    subscription_status: str = Field(default="trial")
+    subscription_expires_at: Optional[datetime] = Field(default=None)
+    billing_cycle: Optional[str] = Field(default=None)
 
     class Settings:
         name = "users"
@@ -43,8 +48,8 @@ class Role(Document):
     Stored as a document in the 'roles' MongoDB collection.
     """
 
-    name: str = Field(..., max_length=255)
-    key: str = Field(..., unique=True)
+    name: str = Field(max_length=255)
+    key: str = Field(unique=True)  # type: ignore
     is_default: bool = Field(default=False)
     description: str = Field(default="")
     permissions: List[str] = Field(default_factory=list)
@@ -70,8 +75,8 @@ class FileSystemItem(Document):
     Stored as a document in the 'file_system_items' MongoDB collection.
     """
 
-    name: str = Field(..., max_length=255)
-    type: str = Field(..., pattern="^(folder|file)$")
+    name: str = Field(max_length=255)
+    type: str = Field(pattern="^(folder|file)$")
     parent_id: Optional[str] = Field(default=None)
     user_id: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -102,9 +107,9 @@ class FileSystemItem(Document):
 class StoragePartition(Document):
     """Represents a virtual storage partition created by a user."""
     
-    user_id: str = Field(..., max_length=255)
-    name: str = Field(..., max_length=255)
-    allocated_size_bytes: int = Field(...)
+    user_id: str = Field(max_length=255)
+    name: str = Field(max_length=255)
+    allocated_size_bytes: int = Field()
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_locked: bool = Field(default=False)
     lock_password_hash: Optional[str] = Field(default=None)

@@ -52,13 +52,13 @@ class FileSystemItemResponse(BaseModel):
 class ShareItemRequest(BaseModel):
     """Request to share a folder or file."""
     email: str
-    permission: str = Field(..., pattern="^(viewer|editor)$")
+    permission: str = Field(pattern="^(viewer|editor)$")
 
 
 class CreateFolderRequest(BaseModel):
     """Create a new folder."""
 
-    name: str = Field(..., min_length=1, max_length=255, description="Folder name")
+    name: str = Field(min_length=1, max_length=255, description="Folder name")
     parentId: Optional[str] = Field(None, description="Parent folder ID, null for root")
     type: ItemType = Field(ItemType.folder, description="Must be 'folder'")
     partitionId: Optional[str] = Field(None, description="Optional partition ID")
@@ -67,13 +67,13 @@ class CreateFolderRequest(BaseModel):
 class LockFolderRequest(BaseModel):
     """Request schema to lock a folder."""
 
-    password: str = Field(..., min_length=4, description="Folder password")
+    password: str = Field(min_length=4, description="Folder password")
 
 
 class RenameItemRequest(BaseModel):
     """Rename a file or folder."""
 
-    name: str = Field(..., min_length=1, max_length=255, description="New name")
+    name: str = Field(min_length=1, max_length=255, description="New name")
 
 
 class MoveItemRequest(BaseModel):
@@ -139,18 +139,18 @@ from pydantic import EmailStr
 
 
 class UserRegisterRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255, description="Full Name")
-    email: EmailStr = Field(..., description="User Email Address")
-    password: str = Field(..., min_length=6, description="Password (min 6 characters)")
+    name: str = Field(min_length=1, max_length=255, description="Full Name")
+    email: EmailStr = Field(description="User Email Address")
+    password: str = Field(min_length=6, description="Password (min 6 characters)")
 
 
 class UserLoginRequest(BaseModel):
-    email: EmailStr = Field(..., description="User Email Address")
-    password: str = Field(..., description="User Password")
+    email: EmailStr = Field(description="User Email Address")
+    password: str = Field(description="User Password")
 
 
 class GoogleLoginRequest(BaseModel):
-    credential: str = Field(..., description="Google ID Token JWT credential")
+    credential: str = Field(description="Google ID Token JWT credential")
 
 
 class UserResponse(BaseModel):
@@ -160,9 +160,14 @@ class UserResponse(BaseModel):
     avatarUrl: Optional[str] = None
     createdAt: str
     isAdmin: bool = False
-    storageLimitBytes: int = 10200547328
+    storageLimitBytes: int = 16106127360
     pricingPlan: str = "free"
     userType: str = "individual"
+    trialExpiresAt: Optional[str] = None
+    subscriptionStatus: str = "trial"
+    subscriptionExpiresAt: Optional[str] = None
+    billingCycle: Optional[str] = None
+    daysRemainingInTrial: int = 10
 
 
     model_config = {"from_attributes": True}
@@ -185,8 +190,8 @@ class PartitionResponse(BaseModel):
 
 
 class CreatePartitionRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    allocatedSizeBytes: int = Field(..., gt=0)
+    name: str = Field(min_length=1, max_length=255)
+    allocatedSizeBytes: int = Field(gt=0)
 
 
 class ResizePartitionRequest(BaseModel):
@@ -195,6 +200,26 @@ class ResizePartitionRequest(BaseModel):
 
 
 class UpdateFileContentRequest(BaseModel):
-    content: str = Field(..., max_length=5242880, description="Updated file text content (5MB max)")
+    content: str = Field(max_length=5242880, description="Updated file text content (5MB max)")
+
+
+class CreateOrderRequest(BaseModel):
+    planName: str
+    billingCycle: str
+
+
+class CreateOrderResponse(BaseModel):
+    orderId: str
+    paymentSessionId: str
+    amount: float
+    currency: str
+
+
+class VerifyPaymentRequest(BaseModel):
+    orderId: str
+    planName: str
+    billingCycle: str
+    paymentId: Optional[str] = None
+    signature: Optional[str] = None
 
 

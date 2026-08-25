@@ -153,7 +153,8 @@ async def update_partition(
         
     if updates:
         await partition.update({"$set": updates})
-        partition = await StoragePartition.get(partition_id)
+        for key, val in updates.items():
+            setattr(partition, key, val)
         
     return await _to_partition_response(partition)
 

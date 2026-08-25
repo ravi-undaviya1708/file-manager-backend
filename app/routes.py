@@ -4,6 +4,7 @@ All routes are prefixed with /api to match the frontend's axios calls.
 """
 
 from __future__ import annotations
+from app.models import StoragePartition
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Request, BackgroundTasks
 
@@ -23,6 +24,7 @@ from app.schemas import (
     LockFolderRequest,
     ItemShareResponse,
     UpdateFileContentRequest,
+    ShareItemRequest,
 )
 import logging
 import tempfile
@@ -85,7 +87,7 @@ def _to_response(item, user_email_map: Optional[dict] = None) -> FileSystemItemR
     )
 
 
-async def _to_response_async(item) -> FileSystemItemResponse:
+async def _to_response_async(item) -> Optional[FileSystemItemResponse]:
     """Convert FileSystemItem to response schema asynchronously, resolving owner email."""
     if not item:
         return None
@@ -187,7 +189,7 @@ async def create_folder(
         from app.security_helpers import verify_write_access
         await verify_write_access(parent, current_user)
 
-        owner_id = parent.user_id
+        owner_id = parent.user_id if parent.user_id else str(current_user.id)
         partition_id = parent.partition_id
 
         from app.security_helpers import get_unlocked_passwords, is_access_blocked
@@ -716,6 +718,18 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
 ):
     """Upload a file to the specified parent folder."""
+    if current_user.pricing_plan == "free":
+        from datetime import datetime, timezone
+        trial_exp = getattr(current_user, "trial_expires_at", None)
+        if trial_exp:
+            if trial_exp.tzinfo is None:
+                trial_exp = trial_exp.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > trial_exp:
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "Your 10-day free trial has expired. Please upgrade your plan to continue uploading."}
+                )
+
     if not file.filename:
         raise HTTPException(
             status_code=400, detail={"error": "Filename is required."}
@@ -735,7 +749,7 @@ async def upload_file(
         from app.security_helpers import verify_write_access
         await verify_write_access(parent, current_user)
 
-        owner_id = parent.user_id
+        owner_id = parent.user_id if parent.user_id else str(current_user.id)
         partition_id = parent.partition_id
 
         from app.security_helpers import get_unlocked_passwords, is_access_blocked
@@ -814,6 +828,18 @@ async def upload_chunk(
 
     Merges when all chunks are uploaded, then registers in DB and uploads to B2.
     """
+    if current_user.pricing_plan == "free":
+        from datetime import datetime, timezone
+        trial_exp = getattr(current_user, "trial_expires_at", None)
+        if trial_exp:
+            if trial_exp.tzinfo is None:
+                trial_exp = trial_exp.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > trial_exp:
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "Your 10-day free trial has expired. Please upgrade your plan to continue uploading."}
+                )
+
     owner_id = str(current_user.id)
     partition_id = None
     if parentId:
@@ -827,7 +853,7 @@ async def upload_chunk(
         from app.security_helpers import verify_write_access
         await verify_write_access(parent, current_user)
 
-        owner_id = parent.user_id
+        owner_id = parent.user_id if parent.user_id else str(current_user.id)
         partition_id = parent.partition_id
 
         from app.security_helpers import get_unlocked_passwords, is_access_blocked
