@@ -9,6 +9,7 @@ venv/
 .venv/
 *.egg-info/
 dist/
+test_cases/
 build/
 
 # Environment
