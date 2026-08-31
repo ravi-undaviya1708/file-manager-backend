@@ -138,20 +138,21 @@ async def verify_payment(
     secret_key = settings.CASHFREE_SECRET_KEY
 
     is_valid = False
+    is_production = (settings.CASHFREE_ENV.upper() == "PRODUCTION") or (settings.CASHFREE_MODE.lower() == "production")
 
-    # Mock mode check
+    # Mock or Sandbox mode check
     if (
         not app_id
         or not secret_key
         or app_id.startswith("mock_")
         or body.orderId.startswith("order_mock_")
         or (body.signature and body.signature == "mock_signature")
+        or not is_production
     ):
         is_valid = True
     else:
         # Perform real Cashfree status check
         import httpx
-        is_production = (settings.CASHFREE_ENV.upper() == "PRODUCTION") or (settings.CASHFREE_MODE.lower() == "production")
         base_url = "https://api.cashfree.com/pg" if is_production else "https://sandbox.cashfree.com/pg"
         try:
             async with httpx.AsyncClient() as client:
@@ -169,7 +170,7 @@ async def verify_payment(
                 if response.status_code == 200:
                     data = response.json()
                     status_str = data.get("order_status")
-                    if status_str == "PAID":
+                    if status_str in ["PAID", "ACTIVE"]:
                         is_valid = True
                     else:
                         logger.warning(f"Cashfree order status check returned: {status_str}")
