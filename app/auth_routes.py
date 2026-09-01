@@ -29,6 +29,8 @@ router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
 def _to_user_response(user: User) -> UserResponse:
     """Helper to convert Beanie User document to UserResponse schema."""
+    from datetime import datetime, timezone, timedelta
+
     avatar_url = user.avatar_url
     if avatar_url and "backblazeb2.com" in avatar_url:
         from app.b2 import generate_presigned_url
@@ -40,16 +42,43 @@ def _to_user_response(user: User) -> UserResponse:
             presigned = generate_presigned_url(key)
             if presigned:
                 avatar_url = presigned
+    # Resolved conflict changes
+    # Calculate trial status & days remaining
+    # from datetime import datetime, timezone
+    # days_remaining = 0
+    # trial_exp = getattr(user, "trial_expires_at", None)
+    # if trial_exp:
+    #     if trial_exp.tzinfo is None:
+    #         trial_exp = trial_exp.replace(tzinfo=timezone.utc)
+    #     import math
+    #     delta = trial_exp - datetime.now(timezone.utc)
+    #     days_remaining = max(0, math.ceil(delta.total_seconds() / 86400))
+    
+    # Calculate trial status & days remaining
+    trial_expires = None
+    days_left = None
+    sub_status = getattr(user, "subscription_status", None)
+    
+    created_dt = user.created_at
+    if created_dt:
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+        trial_end = created_dt + timedelta(days=10)
+        trial_expires = trial_end.isoformat()
+        now_utc = datetime.now(timezone.utc)
+        diff = (trial_end - now_utc).total_seconds()
+        days_left = max(0, int(diff // 86400) + 1)
+        if diff <= 0 and user.pricing_plan == "free":
+            sub_status = "expired"
 
-    from datetime import datetime, timezone
-    days_remaining = 0
-    trial_exp = getattr(user, "trial_expires_at", None)
-    if trial_exp:
-        if trial_exp.tzinfo is None:
-            trial_exp = trial_exp.replace(tzinfo=timezone.utc)
-        import math
-        delta = trial_exp - datetime.now(timezone.utc)
-        days_remaining = max(0, math.ceil(delta.total_seconds() / 86400))
+    if user.pricing_plan != "free":
+        sub_status = getattr(user, "subscription_status", "active") or "active"
+
+    sub_expires_str = None
+    if getattr(user, "subscription_expires_at", None):
+        sub_expires = user.subscription_expires_at
+        if isinstance(sub_expires, datetime):
+            sub_expires_str = sub_expires.isoformat()
 
     return UserResponse(
         id=str(user.id),
@@ -61,11 +90,13 @@ def _to_user_response(user: User) -> UserResponse:
         storageLimitBytes=user.storage_limit_bytes,
         pricingPlan=user.pricing_plan,
         userType=user.user_type,
-        trialExpiresAt=user.trial_expires_at.isoformat() if getattr(user, "trial_expires_at", None) else None,
-        subscriptionStatus=getattr(user, "subscription_status", "trial"),
-        subscriptionExpiresAt=user.subscription_expires_at.isoformat() if getattr(user, "subscription_expires_at", None) else None,
-        billingCycle=getattr(user, "billing_cycle", None),
-        daysRemainingInTrial=days_remaining
+        billingCycle=getattr(user, "billing_cycle", "monthly") or "monthly",
+        subscriptionStatus=sub_status or ("trial" if user.pricing_plan == "free" else "active"),
+        trialExpiresAt=trial_expires,
+        daysRemainingInTrial=days_left,
+        subscriptionExpiresAt=sub_expires_str,
+        customerId=getattr(user, "customer_id", None) or f"cust_{str(user.id)}",
+        phone=getattr(user, "phone", None),
     )
 
 

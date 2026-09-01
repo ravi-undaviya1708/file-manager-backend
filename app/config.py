@@ -20,7 +20,13 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days in minutes
     GOOGLE_CLIENT_ID: str = ""
     
-    # Razorpay Payments Configuration (Legacy)
+    # Cashfree Payments Configuration
+    CASHFREE_APP_ID: str = ""
+    CASHFREE_SECRET_KEY: str = ""
+    CASHFREE_API_VERSION: str = "2023-08-01"
+    CASHFREE_ENV: str = "sandbox"  # "sandbox" or "production"
+    
+    # Razorpay Payments Configuration
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
     

@@ -22,20 +22,23 @@ class User(Document):
     avatar_url: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_admin: bool = Field(default=False)
-    storage_limit_bytes: int = Field(default=16106127360)  # 15 GB
+    storage_limit_bytes: int = Field(default=15032385536)  # 15 GB
     pricing_plan: str = Field(default="free")
     user_type: str = Field(default="individual")
+    billing_cycle: Optional[str] = Field(default="monthly")
+    subscription_status: Optional[str] = Field(default="trial")
     trial_started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     trial_expires_at: Optional[datetime] = Field(default=None)
-    subscription_status: str = Field(default="trial")
     subscription_expires_at: Optional[datetime] = Field(default=None)
-    billing_cycle: Optional[str] = Field(default=None)
+    customer_id: Optional[str] = Field(default=None)
+    phone: Optional[str] = Field(default=None)
 
     class Settings:
         name = "users"
         indexes = [
             "email",
             "google_id",
+            "customer_id",
         ]
 
     def __repr__(self) -> str:
@@ -122,3 +125,40 @@ class StoragePartition(Document):
 
     def __repr__(self) -> str:
         return f"<StoragePartition(id={self.id}, name={self.name}, user_id={self.user_id}, size={self.allocated_size_bytes})>"
+
+
+class PaymentRecord(Document):
+    """Represents a payment transaction / customer subscription record in Cashfree."""
+    
+    user_id: str = Field(..., max_length=255)
+    customer_id: str = Field(..., max_length=255)
+    customer_name: str = Field(default="", max_length=255)
+    customer_email: str = Field(default="", max_length=255)
+    customer_phone: str = Field(default="9999999999", max_length=50)
+    order_id: str = Field(..., max_length=255)
+    cf_order_id: Optional[str] = Field(default=None)
+    cf_payment_id: Optional[str] = Field(default=None)
+    payment_session_id: Optional[str] = Field(default=None)
+    amount: float = Field(...)
+    currency: str = Field(default="INR")
+    plan_name: str = Field(..., max_length=50)
+    billing_cycle: str = Field(default="monthly", max_length=20)
+    status: str = Field(default="PENDING")  # "PENDING", "SUCCESS", "FAILED", "USER_DROPPED"
+    payment_method: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    subscription_expires_at: Optional[datetime] = Field(default=None)
+    raw_response: Optional[dict] = Field(default=None)
+
+    class Settings:
+        name = "payment_records"
+        indexes = [
+            "user_id",
+            "order_id",
+            "status",
+            "customer_id",
+        ]
+
+    def __repr__(self) -> str:
+        return f"<PaymentRecord(id={self.id}, user_id={self.user_id}, order_id={self.order_id}, status={self.status})>"
+

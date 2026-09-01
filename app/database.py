@@ -15,7 +15,7 @@ database = None
 
 async def init_db() -> None:
     """Initialize Beanie ODM with document models."""
-    from app.models import FileSystemItem, User, StoragePartition, Role
+    from app.models import FileSystemItem, User, StoragePartition, Role, PaymentRecord
     global client, database
 
     client = AsyncIOMotorClient(settings.MONGODB_URL)
@@ -23,7 +23,7 @@ async def init_db() -> None:
 
     await init_beanie(
         database=database,
-        document_models=[FileSystemItem, User, StoragePartition, Role],
+        document_models=[FileSystemItem, User, StoragePartition, Role, PaymentRecord],
     )
 
 

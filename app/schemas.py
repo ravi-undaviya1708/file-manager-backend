@@ -160,15 +160,16 @@ class UserResponse(BaseModel):
     avatarUrl: Optional[str] = None
     createdAt: str
     isAdmin: bool = False
-    storageLimitBytes: int = 16106127360
+    storageLimitBytes: int = 15032385536
     pricingPlan: str = "free"
     userType: str = "individual"
+    billingCycle: Optional[str] = "monthly"
+    subscriptionStatus: Optional[str] = "trial"
     trialExpiresAt: Optional[str] = None
-    subscriptionStatus: str = "trial"
+    daysRemainingInTrial: Optional[int] = None
     subscriptionExpiresAt: Optional[str] = None
-    billingCycle: Optional[str] = None
-    daysRemainingInTrial: int = 10
-
+    customerId: Optional[str] = None
+    phone: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
