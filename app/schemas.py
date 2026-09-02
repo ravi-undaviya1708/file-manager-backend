@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import List, Optional
+from datetime import datetime
 
 from pydantic import BaseModel, Field
+
 
 
 class ItemType(str, Enum):
@@ -222,5 +224,21 @@ class VerifyPaymentRequest(BaseModel):
     billingCycle: str
     paymentId: Optional[str] = None
     signature: Optional[str] = None
+    otp: Optional[str] = None
+
+
+class VerifyPaymentResponse(BaseModel):
+    success: bool
+    message: str
+    orderId: str
+    paymentId: Optional[str] = None
+    planName: str
+    billingCycle: str
+    amount: float
+    currency: str = "INR"
+    storageLimitBytes: int
+    subscriptionStatus: str
+    subscriptionExpiresAt: Optional[datetime] = None
+
 
 
