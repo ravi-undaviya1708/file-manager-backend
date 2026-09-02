@@ -138,14 +138,16 @@ async def _create_cashfree_order_api(
     plan_name: str,
     billing_cycle: str,
     user_id: str,
-) -> Optional[dict]:
-    """Call official Cashfree PG Order creation API."""
+) -> tuple[Optional[dict], Optional[str]]:
+    """Call official Cashfree PG Order creation API.
+    Returns (order_data, error_message).
+    """
     settings = get_settings()
     app_id = settings.CASHFREE_APP_ID
     secret_key = settings.CASHFREE_SECRET_KEY
 
     if not app_id or not secret_key or app_id.startswith("mock_"):
-        return None
+        return None, None
 
     import httpx
 
@@ -191,18 +193,29 @@ async def _create_cashfree_order_api(
                 f"{base_url}/orders",
                 json=payload,
                 headers=headers,
-                timeout=10.0,
+                timeout=12.0,
             )
             if response.status_code in [200, 201]:
-                return response.json()
+                logger.info(f"Cashfree order created successfully: order_id={order_id}")
+                return response.json(), None
+            else:
+                err_body = response.text
+                logger.error(
+                    f"Cashfree order creation failed with status {response.status_code}: {err_body}"
+                )
+                try:
+                    err_json = response.json()
+                    err_msg = err_json.get("message") or err_json.get("description") or err_body
+                except Exception:
+                    err_msg = err_body
+                return None, f"[{response.status_code}] {err_msg}"
     except Exception as e:
-        print(f"Cashfree API order creation error: {e}")
-
-    return None
+        logger.error(f"Cashfree API order creation exception: {e}")
+        return None, str(e)
 
 
 async def _fetch_cashfree_order_status(order_id: str) -> Optional[dict]:
-    """Fetch order status and payments from Cashfree PG API."""
+    """Fetch order status from Cashfree PG API."""
     settings = get_settings()
     app_id = settings.CASHFREE_APP_ID
     secret_key = settings.CASHFREE_SECRET_KEY
@@ -228,8 +241,45 @@ async def _fetch_cashfree_order_status(order_id: str) -> Optional[dict]:
             )
             if response.status_code == 200:
                 return response.json()
+            else:
+                logger.error(f"Cashfree fetch order failed [{response.status_code}]: {response.text}")
     except Exception as e:
-        print(f"Cashfree order fetch error: {e}")
+        logger.error(f"Cashfree order fetch error: {e}")
+
+    return None
+
+
+async def _fetch_cashfree_order_payments(order_id: str) -> Optional[list]:
+    """Fetch payments list for an order from Cashfree PG API."""
+    settings = get_settings()
+    app_id = settings.CASHFREE_APP_ID
+    secret_key = settings.CASHFREE_SECRET_KEY
+
+    if not app_id or not secret_key or app_id.startswith("mock_"):
+        return None
+
+    import httpx
+
+    base_url = _get_cashfree_base_url(settings.CASHFREE_ENV)
+    headers = {
+        "x-client-id": app_id,
+        "x-client-secret": secret_key,
+        "x-api-version": settings.CASHFREE_API_VERSION or "2023-08-01",
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{base_url}/orders/{order_id}/payments",
+                headers=headers,
+                timeout=10.0,
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"Cashfree fetch payments failed [{response.status_code}]: {response.text}")
+    except Exception as e:
+        logger.error(f"Cashfree order payments fetch error: {e}")
 
     return None
 
@@ -281,7 +331,7 @@ async def create_order(
     order_id = f"cf_ord_{user_prefix}_{timestamp}_{rand_suffix}"
 
     # Handshake with Cashfree API
-    cf_data = await _create_cashfree_order_api(
+    cf_data, cf_error = await _create_cashfree_order_api(
         order_id=order_id,
         amount=amount,
         customer_id=customer_id,
@@ -292,6 +342,17 @@ async def create_order(
         billing_cycle=billing_cycle,
         user_id=str(current_user.id),
     )
+
+    settings = get_settings()
+
+    # If real Cashfree credentials failed, raise an explicit HTTP error with details
+    if cf_error:
+        if settings.CASHFREE_APP_ID and not settings.CASHFREE_APP_ID.startswith("mock_"):
+            logger.error(f"Cashfree order creation error for user {current_user.id}: {cf_error}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY if "401" in cf_error or "authentication" in cf_error.lower() else status.HTTP_400_BAD_REQUEST,
+                detail={"error": f"Cashfree Gateway Error: {cf_error}. Please verify CASHFREE_APP_ID and CASHFREE_SECRET_KEY in backend config/.env."}
+            )
 
     cf_order_id = str(cf_data.get("cf_order_id")) if cf_data and "cf_order_id" in cf_data else None
     payment_session_id = (
@@ -327,7 +388,6 @@ async def create_order(
         current_user.customer_id = customer_id
         await current_user.save()
 
-    settings = get_settings()
     return CreateOrderResponse(
         orderId=order_id,
         amount=amount,
@@ -353,8 +413,8 @@ async def verify_payment(
     body: VerifyPaymentRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Verify payment receipt, validate OTP, record payment success, and upgrade account capacity."""
-    # Check OTP if submitted
+    """Verify payment receipt, validate status with Cashfree API, record payment success, and upgrade account capacity."""
+    # Check OTP if submitted (mock sandbox helper)
     if body.otp:
         clean_otp = body.otp.strip()
         if clean_otp == "000000" or len(clean_otp) < 4:
@@ -383,13 +443,21 @@ async def verify_payment(
     cf_payment_id = body.paymentId or f"cf_pay_{random.randint(1000000, 9999999)}"
     payment_method = body.paymentMethod or "upi"
 
-    # If real Cashfree order was placed, verify with Cashfree API
+    # If real Cashfree order was placed, verify directly with Cashfree API
     if payment_record and payment_record.cf_order_id:
         cf_order = await _fetch_cashfree_order_status(body.orderId)
         if cf_order:
             cf_status = cf_order.get("order_status")
-            if cf_status in ["PAID", "ACTIVE", "SUCCESS", "COMPLETED"]:
-                payment_method = cf_order.get("payment_method", payment_method)
+            # Fetch payments list from Cashfree
+            cf_payments = await _fetch_cashfree_order_payments(body.orderId)
+            if cf_payments and isinstance(cf_payments, list) and len(cf_payments) > 0:
+                for p in cf_payments:
+                    if p.get("payment_status") == "SUCCESS":
+                        cf_payment_id = str(p.get("cf_payment_id") or cf_payment_id)
+                        p_group = p.get("payment_group")
+                        if p_group:
+                            payment_method = str(p_group).lower()
+                        break
 
     if payment_record:
         payment_record.status = "SUCCESS"
