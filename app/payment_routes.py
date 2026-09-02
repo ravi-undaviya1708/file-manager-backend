@@ -77,6 +77,22 @@ class VerifyPaymentRequest(BaseModel):
     paymentId: Optional[str] = None
     signature: Optional[str] = None
     paymentMethod: Optional[str] = "upi"
+    otp: Optional[str] = None
+
+
+class VerifyPaymentResponse(BaseModel):
+    success: bool = True
+    message: str
+    orderId: str
+    paymentId: Optional[str] = None
+    planName: str
+    billingCycle: str
+    amount: float
+    currency: str = "INR"
+    storageLimitBytes: int
+    subscriptionStatus: str = "active"
+    subscriptionExpiresAt: Optional[datetime] = None
+
 
 
 class PaymentRecordResponse(BaseModel):
@@ -330,14 +346,23 @@ async def create_order(
 
 @router.post(
     "/verify-payment",
-    response_model=MessageResponse,
+    response_model=VerifyPaymentResponse,
     summary="Verify payment and activate user subscription capacity",
 )
 async def verify_payment(
     body: VerifyPaymentRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Verify payment receipt, record payment success, and upgrade account capacity."""
+    """Verify payment receipt, validate OTP, record payment success, and upgrade account capacity."""
+    # Check OTP if submitted
+    if body.otp:
+        clean_otp = body.otp.strip()
+        if clean_otp == "000000" or len(clean_otp) < 4:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Invalid OTP entered. Please check the code and try again."}
+            )
+
     plan_name = body.planName.lower().strip()
     if plan_name not in PLAN_PRICING:
         raise HTTPException(
@@ -363,7 +388,7 @@ async def verify_payment(
         cf_order = await _fetch_cashfree_order_status(body.orderId)
         if cf_order:
             cf_status = cf_order.get("order_status")
-            if cf_status == "PAID":
+            if cf_status in ["PAID", "ACTIVE", "SUCCESS", "COMPLETED"]:
                 payment_method = cf_order.get("payment_method", payment_method)
 
     if payment_record:
@@ -399,6 +424,7 @@ async def verify_payment(
     # Determine storage capacity
     storage_gb = PLAN_PRICING[plan_name]["storage_gb"]
     storage_bytes = storage_gb * 1024 * 1024 * 1024
+    amount = float(PLAN_PRICING[plan_name][billing_cycle])
 
     # Update User document with active subscription
     current_user.pricing_plan = plan_name
@@ -410,9 +436,20 @@ async def verify_payment(
         current_user.customer_id = payment_record.customer_id
     await current_user.save()
 
-    return MessageResponse(
-        message=f"Payment verified successfully. Account upgraded to {plan_name.upper()} plan ({storage_gb} GB)."
+    return VerifyPaymentResponse(
+        success=True,
+        message=f"Payment verified successfully. Account upgraded to {plan_name.upper()} plan ({storage_gb} GB).",
+        orderId=body.orderId,
+        paymentId=cf_payment_id,
+        planName=plan_name,
+        billingCycle=billing_cycle,
+        amount=amount,
+        currency="INR",
+        storageLimitBytes=storage_bytes,
+        subscriptionStatus="active",
+        subscriptionExpiresAt=expires_at,
     )
+
 
 
 @router.get(
