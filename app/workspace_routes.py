@@ -78,6 +78,13 @@ async def get_workspace_tree(
     if await is_access_blocked(root_folder, owner_id, unlocked_passwords):
         raise HTTPException(status_code=403, detail="Workspace folder is locked")
 
+    # Auto-sync files created in the terminal (like npx create-react-app) into DB in background
+    try:
+        from app.codespace_sync import schedule_sync_disk_to_workspace_db
+        schedule_sync_disk_to_workspace_db(folder_id, owner_id)
+    except Exception:
+        pass
+
     # Fetch all items belonging to owner that are not deleted
     all_items = await FileSystemItem.find(
         FileSystemItem.user_id == owner_id,
@@ -286,6 +293,13 @@ async def search_workspace(
     owner_id = root.user_id if root.user_id else str(current_user.id)
     query_lower = body.query.lower().strip()
 
+    # Sync local disk changes to DB
+    try:
+        from app.codespace_sync import sync_disk_to_workspace_db
+        await sync_disk_to_workspace_db(folder_id, owner_id)
+    except Exception:
+        pass
+
     all_items = await FileSystemItem.find(
         FileSystemItem.user_id == owner_id,
         FileSystemItem.is_deleted == False
@@ -317,4 +331,21 @@ async def search_workspace(
             })
 
     return {"query": body.query, "matches": matches}
+
+
+@router.post("/{folder_id}/sync", summary="Synchronize terminal filesystem with workspace database")
+async def sync_workspace(
+    folder_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Explicitly triggers disk-to-database synchronization for the active workspace."""
+    root = await FileSystemItem.get(folder_id)
+    if not root or root.is_deleted:
+        raise HTTPException(status_code=404, detail="Workspace folder not found")
+    owner_id = root.user_id if root.user_id else str(current_user.id)
+    
+    from app.codespace_sync import sync_disk_to_workspace_db
+    await sync_disk_to_workspace_db(folder_id, owner_id)
+    return {"success": True, "message": "Workspace synchronized successfully"}
+
 

@@ -20,6 +20,12 @@ except ImportError:
 from app.auth import decode_access_token
 from app.models import User, FileSystemItem
 from app.b2 import get_user_b2_prefix, get_item_path, get_b2_client
+from app.codespace_sync import (
+    get_workspace_sandbox_base,
+    get_workspace_sandbox_dir,
+    populate_workspace_files,
+    sync_disk_to_workspace_db,
+)
 from beanie import PydanticObjectId
 import anyio
 
@@ -121,10 +127,9 @@ async def terminal_websocket_endpoint(
     owner_id = str(user.id)
     user_label = user.name or "user"
     
-    # Create dedicated sandbox folder for this workspace session
-    sandbox_base = tempfile.mkdtemp(prefix=f"codespace_{owner_id[:8]}_")
-    workspace_root = os.path.join(sandbox_base, "workspace")
-    os.makedirs(workspace_root, exist_ok=True)
+    # Use persistent dedicated sandbox folder for this workspace session
+    sandbox_base = get_workspace_sandbox_base(workspace_id, owner_id)
+    workspace_root = get_workspace_sandbox_dir(workspace_id, owner_id)
 
     # Populate sandbox with existing files from B2 / MongoDB
     await populate_workspace_files(workspace_id, owner_id, workspace_root)
@@ -211,7 +216,6 @@ alias cls="clear"
     if not PtyProcessUnicode:
         await websocket.send_text("\r\n\x1b[33mInteractive PTY terminal requires a POSIX environment (Linux/macOS).\x1b[0m\r\n")
         await websocket.close()
-        shutil.rmtree(sandbox_base, ignore_errors=True)
         return
 
     try:
@@ -225,7 +229,6 @@ alias cls="clear"
         logger.error(f"Failed to spawn jailed PTY: {e}")
         await websocket.send_text(f"\r\n\x1b[31mFailed to start terminal: {str(e)}\x1b[0m\r\n")
         await websocket.close()
-        shutil.rmtree(sandbox_base, ignore_errors=True)
         return
 
     # Task to stream output from PTY to WebSocket
@@ -250,15 +253,19 @@ alias cls="clear"
         while True:
             msg = await websocket.receive_text()
             
-            # Check control messages (e.g. resize)
+            # Check control messages (e.g. resize, ping/pong keepalive)
             if msg.startswith("{") and msg.endswith("}"):
                 try:
                     payload = json.loads(msg)
-                    if payload.get("type") == "resize":
+                    msg_type = payload.get("type")
+                    if msg_type == "resize":
                         cols = int(payload.get("cols", 80))
                         rows = int(payload.get("rows", 24))
                         if cols > 0 and rows > 0:
                             pty_proc.setwinsize(rows, cols)
+                        continue
+                    elif msg_type == "ping":
+                        await websocket.send_text(json.dumps({"type": "pong"}))
                         continue
                 except (json.JSONDecodeError, ValueError):
                     pass
@@ -278,7 +285,8 @@ alias cls="clear"
                 pty_proc.terminate(force=True)
         except Exception:
             pass
+        # Sync newly created files to MongoDB/B2
         try:
-            shutil.rmtree(sandbox_base, ignore_errors=True)
+            await sync_disk_to_workspace_db(workspace_id, owner_id)
         except Exception:
             pass
