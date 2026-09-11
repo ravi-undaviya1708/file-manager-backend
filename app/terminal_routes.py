@@ -91,6 +91,7 @@ async def populate_workspace_files(workspace_id: str, owner_id: str, target_dir:
 
 
 @router.websocket("/ws/terminal/{workspace_id}")
+@router.websocket("/api/ws/terminal/{workspace_id}")
 async def terminal_websocket_endpoint(
     websocket: WebSocket,
     workspace_id: str,

@@ -8,6 +8,35 @@ from typing import Optional
 import bcrypt
 import httpx
 import jwt
+
+# Robustly resolve PyJWT encode/decode regardless of package shadowing
+try:
+    if hasattr(jwt, "encode") and hasattr(jwt, "decode"):
+        jwt_encode = jwt.encode
+        jwt_decode = jwt.decode
+        PyJWTError = getattr(jwt, "PyJWTError", Exception)
+        ExpiredSignatureError = getattr(jwt, "ExpiredSignatureError", Exception)
+    else:
+        from jwt.api_jwt import PyJWT
+        _jwt_inst = PyJWT()
+        jwt_encode = _jwt_inst.encode
+        jwt_decode = _jwt_inst.decode
+        PyJWTError = getattr(jwt, "PyJWTError", Exception)
+        ExpiredSignatureError = getattr(jwt, "ExpiredSignatureError", Exception)
+except Exception:
+    try:
+        from jwt import PyJWT
+        _jwt_inst = PyJWT()
+        jwt_encode = _jwt_inst.encode
+        jwt_decode = _jwt_inst.decode
+        PyJWTError = getattr(jwt, "PyJWTError", Exception)
+        ExpiredSignatureError = getattr(jwt, "ExpiredSignatureError", Exception)
+    except Exception:
+        jwt_encode = getattr(jwt, "encode", None)
+        jwt_decode = getattr(jwt, "decode", None)
+        PyJWTError = Exception
+        ExpiredSignatureError = Exception
+
 from beanie import PydanticObjectId
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -46,7 +75,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
             minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(
+    encoded_jwt = jwt_encode(
         to_encode,
         settings.JWT_SECRET_KEY,
         algorithm=settings.JWT_ALGORITHM
@@ -57,13 +86,13 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 def decode_access_token(token: str) -> Optional[dict]:
     """Decode and validate a JWT access token."""
     try:
-        payload = jwt.decode(
+        payload = jwt_decode(
             token,
             settings.JWT_SECRET_KEY,
             algorithms=[settings.JWT_ALGORITHM]
         )
         return payload
-    except jwt.PyJWTError:
+    except PyJWTError:
         return None
 
 
