@@ -21,6 +21,10 @@ from app.auth_routes import router as auth_router
 from app.partition_routes import router as partition_router
 from app.admin_routes import router as admin_router
 from app.payment_routes import router as payment_router
+from app.workspace_routes import router as workspace_router
+from app.execution_routes import router as execution_router
+from app.terminal_routes import router as terminal_router
+from app.preview_routes import router as preview_router
 from app.seed import seed_database
 
 settings = get_settings()
@@ -60,6 +64,10 @@ app.include_router(auth_router)
 app.include_router(partition_router)
 app.include_router(admin_router)
 app.include_router(payment_router)
+app.include_router(workspace_router)
+app.include_router(execution_router)
+app.include_router(terminal_router)
+app.include_router(preview_router)
 app.include_router(router)
 
 
