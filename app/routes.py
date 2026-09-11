@@ -102,53 +102,79 @@ async def _to_response_async(item) -> Optional[FileSystemItemResponse]:
 # ── List All Items ────────────────────────────────────────────────────────────
 
 
+from fastapi import Query
+
 @router.get(
     "/folders",
     response_model=List[FileSystemItemResponse],
-    summary="List all file system items",
+    summary="List file system items with lazy loading, pagination, and filtering",
 )
 async def list_items(
     request: Request,
-    background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user)
+    parent_id: Optional[str] = Query(None),
+    partition_id: Optional[str] = Query(None),
+    starred: Optional[bool] = Query(None),
+    bin: Optional[bool] = Query(False),
+    safe: Optional[bool] = Query(False),
+    shared: Optional[bool] = Query(False),
+    category: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=500),
+    cursor: Optional[str] = Query(None),
+    sort_by: str = Query("name"),
+    sort_order: str = Query("asc"),
+    all: Optional[bool] = Query(False),
+    current_user: User = Depends(get_current_user),
 ):
-    """Return every file and folder accessible to the authenticated user, filtering out locked sub-items."""
-    from app.b2 import sync_b2_to_mongodb
-    background_tasks.add_task(sync_b2_to_mongodb, str(current_user.id))
-    # Fetch owned and shared items recursively
-    items = await crud.get_accessible_items(str(current_user.id), current_user.email)
+    """Return immediate files and folders matching the criteria with high performance."""
+    user_id_str = str(current_user.id)
+    user_email = current_user.email
 
-    from app.security_helpers import get_unlocked_passwords, is_lineage_blocked
+    from app.security_helpers import get_unlocked_passwords, is_access_blocked
     unlocked_passwords = get_unlocked_passwords(request)
-    items_by_id = {str(item.id): item for item in items}
 
-    filtered_items = []
-    for item in items:
-        # Pass the item's actual owner user_id to is_lineage_blocked since they determine locking bounds
-        owner_id = item.user_id if item.user_id else str(current_user.id)
-        if await is_lineage_blocked(item, owner_id, unlocked_passwords, items_by_id):
-            continue
-        filtered_items.append(item)
+    # If parent_id is specified (and not root/null), verify access to the parent folder first
+    if parent_id and parent_id not in ("root", "null"):
+        parent_folder = await FileSystemItem.get(parent_id)
+        if not parent_folder or parent_folder.type != "folder":
+            raise HTTPException(status_code=404, detail={"error": "Folder not found."})
+        parent_owner = parent_folder.user_id if parent_folder.user_id else user_id_str
+        if await is_access_blocked(parent_folder, parent_owner, unlocked_passwords):
+            raise HTTPException(status_code=403, detail={"error": "Access to locked folder denied."})
+
+    if all or (parent_id is None and not any([bin, safe, shared, category, search, starred, partition_id])):
+        items = await crud.get_accessible_items(user_id_str, user_email)
+    else:
+        items, _, _, _ = await crud.get_folder_children_paginated(
+            user_id=user_id_str,
+            email=user_email,
+            parent_id=parent_id,
+            partition_id=partition_id,
+            starred=starred,
+            bin_only=bin,
+            safe_folder_only=safe,
+            shared_with_me=shared,
+            category=category,
+            search=search,
+            limit=limit,
+            cursor=cursor,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
 
     # Pre-populate user email map for fast response serialization
-    user_ids = {item.user_id for item in filtered_items if item.user_id}
-    user_email_map = {}
-    if user_ids:
+    user_ids = {item.user_id for item in items if item.user_id}
+    user_email_map = {user_id_str: user_email}
+    other_user_ids = [uid for uid in user_ids if uid != user_id_str]
+    if other_user_ids:
         from beanie import PydanticObjectId
-        # Find users by ObjectId
-        object_ids = [PydanticObjectId(uid) for uid in user_ids if len(uid) == 24]
+        object_ids = [PydanticObjectId(uid) for uid in other_user_ids if len(uid) == 24]
         if object_ids:
             users_obj = await User.find({"_id": {"$in": object_ids}}).to_list()
             for u in users_obj:
                 user_email_map[str(u.id)] = u.email
-        # Find users by string ID
-        str_ids = [uid for uid in user_ids if len(uid) != 24]
-        if str_ids:
-            users_str = await User.find({"_id": {"$in": str_ids}}).to_list()
-            for u in users_str:
-                user_email_map[str(u.id)] = u.email
 
-    return [_to_response(item, user_email_map) for item in filtered_items]
+    return [_to_response(item, user_email_map) for item in items]
 
 
 
@@ -560,57 +586,72 @@ async def duplicate_item(
     if not item:
         raise HTTPException(status_code=404, detail={"error": "Item not found."})
 
-    from app.security_helpers import verify_read_access, verify_write_access
+    from app.security_helpers import verify_read_access, verify_write_access, get_unlocked_passwords, is_access_blocked
     await verify_read_access(item, current_user)
 
-    owner_id = item.user_id if item.user_id else str(current_user.id)
-
-    from app.security_helpers import get_unlocked_passwords, is_access_blocked
+    src_owner_id = item.user_id if item.user_id else str(current_user.id)
     unlocked_passwords = get_unlocked_passwords(request)
-    if await is_access_blocked(item, owner_id, unlocked_passwords):
+
+    if await is_access_blocked(item, src_owner_id, unlocked_passwords):
         raise HTTPException(
             status_code=403,
             detail={"error": "Item is locked."},
         )
 
-    # Determine parent folder where copy is created and check write access
+    # Determine destination parent folder and ownership
     if targetParentId is not None:
         use_target = True
-        actual_parent = None if targetParentId in ("root", "null") else targetParentId
+        actual_parent = None if targetParentId in ("root", "null", "") else targetParentId
         if actual_parent:
             parent_item = await FileSystemItem.get(actual_parent)
             if not parent_item:
                 raise HTTPException(status_code=404, detail={"error": "Target parent folder not found."})
-                
+            if parent_item.type != "folder":
+                raise HTTPException(status_code=400, detail={"error": "Target must be a folder."})
+
             await verify_write_access(parent_item, current_user)
 
-            # Ensure we do not mix owners
-            parent_owner_id = parent_item.user_id if parent_item.user_id else str(current_user.id)
-            if parent_owner_id != owner_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail={"error": "Cannot duplicate items across different shared folders owned by different users."}
-                )
+            dest_owner_id = parent_item.user_id if parent_item.user_id else str(current_user.id)
+            dest_partition_id = parent_item.partition_id
 
-            if await is_access_blocked(parent_item, owner_id, unlocked_passwords):
+            if await is_access_blocked(parent_item, dest_owner_id, unlocked_passwords):
                 raise HTTPException(
                     status_code=403,
                     detail={"error": "Target parent folder is locked."},
                 )
+        else:
+            # Target is root of current user
+            dest_owner_id = str(current_user.id)
+            dest_partition_id = None
     else:
+        # In-place duplicate
         use_target = False
-        actual_parent = None
+        actual_parent = item.parent_id
         if item.parent_id:
             parent_item = await FileSystemItem.get(item.parent_id)
             if parent_item:
                 await verify_write_access(parent_item, current_user)
-                if await is_access_blocked(parent_item, owner_id, unlocked_passwords):
+                dest_owner_id = parent_item.user_id if parent_item.user_id else str(current_user.id)
+                dest_partition_id = parent_item.partition_id
+                if await is_access_blocked(parent_item, dest_owner_id, unlocked_passwords):
                     raise HTTPException(
                         status_code=403,
                         detail={"error": "Parent folder is locked."},
                     )
+            else:
+                dest_owner_id = str(current_user.id)
+                dest_partition_id = None
+        else:
+            dest_owner_id = src_owner_id if src_owner_id == str(current_user.id) else str(current_user.id)
+            dest_partition_id = item.partition_id
 
-    new_item = await crud.duplicate_item(item, owner_id, actual_parent, use_target)
+    new_item = await crud.duplicate_item(
+        item=item,
+        user_id=dest_owner_id,
+        target_parent_id=actual_parent,
+        use_target_parent=use_target,
+        partition_id=dest_partition_id,
+    )
     return await _to_response_async(new_item)
 
 
@@ -782,13 +823,8 @@ async def upload_file(
     if partition_id:
         partition = await StoragePartition.get(partition_id)
         if partition:
-            files_in_part = await FileSystemItem.find(
-                FileSystemItem.user_id == owner_id,
-                FileSystemItem.partition_id == partition_id,
-                FileSystemItem.type == "file",
-                FileSystemItem.is_deleted == False
-            ).to_list()
-            partition_used = sum(f.size or 0 for f in files_in_part)
+            part_map = await crud.get_all_partitions_used_sizes(owner_id)
+            partition_used = part_map.get(str(partition.id), 0)
             if partition_used + file_size > partition.allocated_size_bytes:
                 raise HTTPException(
                     status_code=400,
@@ -957,13 +993,8 @@ async def upload_chunk(
             if partition_id:
                 partition = await StoragePartition.get(partition_id)
                 if partition:
-                    files_in_part = await FileSystemItem.find(
-                        FileSystemItem.user_id == owner_id,
-                        FileSystemItem.partition_id == partition_id,
-                        FileSystemItem.type == "file",
-                        FileSystemItem.is_deleted == False
-                    ).to_list()
-                    partition_used = sum(f.size or 0 for f in files_in_part)
+                    part_map = await crud.get_all_partitions_used_sizes(owner_id)
+                    partition_used = part_map.get(str(partition.id), 0)
                     if partition_used + file_size > partition.allocated_size_bytes:
                         # Cleanup temp files
                         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1403,72 +1434,47 @@ async def update_file_content(
 async def get_folder_children(
     folder_id: str,
     request: Request,
+    limit: int = Query(200, ge=1, le=500),
+    cursor: Optional[str] = Query(None),
+    sort_by: str = Query("name"),
+    sort_order: str = Query("asc"),
     current_user: User = Depends(get_current_user),
 ):
-    """Retrieve direct children of a folder, checking credentials for locked bounds."""
+    """Retrieve direct children of a folder with lazy loading and pagination."""
     from app.security_helpers import verify_read_access, is_access_blocked, get_unlocked_passwords
 
     unlocked_passwords = get_unlocked_passwords(request)
+    user_id_str = str(current_user.id)
+    user_email = current_user.email
 
-    if folder_id == "root":
-        # Get accessible items at the root level (parent_id is None or empty string)
-        # We can fetch accessible items first
-        all_accessible = await crud.get_accessible_items(str(current_user.id), current_user.email)
-        root_items = [
-            item for item in all_accessible
-            if (item.parent_id is None or item.parent_id == "" or item.parent_id == "root")
-            and not item.is_deleted
-        ]
-        
-        # Check lineage locks (for root, it has no parents, but let's be safe)
-        filtered_items = []
-        for item in root_items:
-            owner_id = item.user_id if item.user_id else str(current_user.id)
-            if getattr(item, "is_locked", False):
-                # If a root folder is locked, we still show the folder itself in children list
-                pass
-            filtered_items.append(item)
-            
-        items = filtered_items
-    else:
-        # Fetch target folder
+    if folder_id not in ("root", "null"):
         folder = await FileSystemItem.get(folder_id)
         if not folder or folder.type != "folder":
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "Folder not found"}
-            )
-
-        # Verify access
+            raise HTTPException(status_code=404, detail={"error": "Folder not found"})
         await verify_read_access(folder, current_user)
-
-        owner_id = folder.user_id if folder.user_id else str(current_user.id)
+        owner_id = folder.user_id if folder.user_id else user_id_str
         if await is_access_blocked(folder, owner_id, unlocked_passwords):
-            raise HTTPException(
-                status_code=403,
-                detail={"error": "Access to locked folder denied."}
-            )
+            raise HTTPException(status_code=403, detail={"error": "Access to locked folder denied."})
 
-        # Get direct children
-        items = await FileSystemItem.find({
-            "parent_id": folder_id,
-            "is_deleted": False
-        }).to_list()
+    items, _, _, _ = await crud.get_folder_children_paginated(
+        user_id=user_id_str,
+        email=user_email,
+        parent_id=folder_id,
+        limit=limit,
+        cursor=cursor,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
 
-    # Pre-populate user email map for fast response serialization
     user_ids = {item.user_id for item in items if item.user_id}
-    user_email_map = {}
-    if user_ids:
+    user_email_map = {user_id_str: user_email}
+    other_user_ids = [uid for uid in user_ids if uid != user_id_str]
+    if other_user_ids:
         from beanie import PydanticObjectId
-        object_ids = [PydanticObjectId(uid) for uid in user_ids if len(uid) == 24]
+        object_ids = [PydanticObjectId(uid) for uid in other_user_ids if len(uid) == 24]
         if object_ids:
             users_obj = await User.find({"_id": {"$in": object_ids}}).to_list()
             for u in users_obj:
-                user_email_map[str(u.id)] = u.email
-        str_ids = [uid for uid in user_ids if len(uid) != 24]
-        if str_ids:
-            users_str = await User.find({"_id": {"$in": str_ids}}).to_list()
-            for u in users_str:
                 user_email_map[str(u.id)] = u.email
 
     return [_to_response(item, user_email_map) for item in items]

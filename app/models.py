@@ -65,6 +65,9 @@ class Role(Document):
 
 
 
+from pymongo import IndexModel, ASCENDING, DESCENDING
+
+
 class ItemShare(BaseModel):
     """Represents sharing metadata for a file or folder."""
     user_id: str
@@ -95,12 +98,54 @@ class FileSystemItem(Document):
     class Settings:
         name = "file_system_items"
         indexes = [
+            # Primary folder child listing: user_id + parent_id + is_deleted + partition_id
+            IndexModel(
+                [("user_id", ASCENDING), ("parent_id", ASCENDING), ("is_deleted", ASCENDING), ("partition_id", ASCENDING)],
+                name="idx_user_parent_deleted_partition"
+            ),
+            # Direct child listing & sorting by name
+            IndexModel(
+                [("user_id", ASCENDING), ("parent_id", ASCENDING), ("is_deleted", ASCENDING), ("name", ASCENDING)],
+                name="idx_user_parent_deleted_name"
+            ),
+            # Starred items view
+            IndexModel(
+                [("user_id", ASCENDING), ("is_deleted", ASCENDING), ("starred", ASCENDING)],
+                name="idx_user_deleted_starred"
+            ),
+            # Recycle bin view
+            IndexModel(
+                [("user_id", ASCENDING), ("is_deleted", ASCENDING), ("parent_id", ASCENDING)],
+                name="idx_user_deleted_parent"
+            ),
+            # Safe / Locked folder view
+            IndexModel(
+                [("user_id", ASCENDING), ("is_locked", ASCENDING), ("is_deleted", ASCENDING)],
+                name="idx_user_locked_deleted"
+            ),
+            # Shared with me lookups
+            IndexModel(
+                [("shares.user_id", ASCENDING), ("is_deleted", ASCENDING)],
+                name="idx_shares_user_deleted"
+            ),
+            IndexModel(
+                [("shares.email", ASCENDING), ("is_deleted", ASCENDING)],
+                name="idx_shares_email_deleted"
+            ),
+            # Storage usage aggregation
+            IndexModel(
+                [("user_id", ASCENDING), ("type", ASCENDING), ("size", ASCENDING)],
+                name="idx_user_type_size"
+            ),
+            # Partition usage aggregation
+            IndexModel(
+                [("user_id", ASCENDING), ("partition_id", ASCENDING), ("type", ASCENDING), ("is_deleted", ASCENDING), ("size", ASCENDING)],
+                name="idx_user_part_type_del_size"
+            ),
+            # Fallback single field lookups
             "name",
             "parent_id",
-            "is_deleted",
-            "starred",
             "user_id",
-            "partition_id",
         ]
 
     def __repr__(self) -> str:

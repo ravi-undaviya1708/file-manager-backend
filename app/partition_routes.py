@@ -20,16 +20,12 @@ from app.schemas import (
 router = APIRouter(prefix="/api/partitions", tags=["Partitions"])
 
 
-async def _to_partition_response(partition: StoragePartition) -> PartitionResponse:
-    """Calculate actual used size and format partition details."""
-    # Find all files belonging to this partition
-    files = await FileSystemItem.find(
-        FileSystemItem.user_id == partition.user_id,
-        FileSystemItem.partition_id == str(partition.id),
-        FileSystemItem.type == "file",
-        FileSystemItem.is_deleted == False
-    ).to_list()
-    used_size = sum(f.size or 0 for f in files)
+async def _to_partition_response(partition: StoragePartition, used_size: Optional[int] = None) -> PartitionResponse:
+    """Format partition details with cached/pre-aggregated used size."""
+    if used_size is None:
+        from app.crud import get_all_partitions_used_sizes
+        used_map = await get_all_partitions_used_sizes(partition.user_id)
+        used_size = used_map.get(str(partition.id), 0)
     
     return PartitionResponse(
         id=str(partition.id),
@@ -47,15 +43,29 @@ async def _to_partition_response(partition: StoragePartition) -> PartitionRespon
     summary="Get all user partitions"
 )
 async def list_partitions(current_user: User = Depends(get_current_user)):
-    """Retrieve all storage partitions created by the current user."""
+    """Retrieve all storage partitions created by the current user using batched aggregation."""
+    user_id_str = str(current_user.id)
     partitions = await StoragePartition.find(
-        StoragePartition.user_id == str(current_user.id)
+        StoragePartition.user_id == user_id_str
     ).to_list()
     
-    response = []
-    for p in partitions:
-        response.append(await _to_partition_response(p))
-    return response
+    if not partitions:
+        return []
+
+    from app.crud import get_all_partitions_used_sizes
+    used_map = await get_all_partitions_used_sizes(user_id_str)
+    
+    return [
+        PartitionResponse(
+            id=str(p.id),
+            name=p.name,
+            allocatedSizeBytes=p.allocated_size_bytes,
+            usedSizeBytes=used_map.get(str(p.id), 0),
+            createdAt=p.created_at.isoformat() if p.created_at else "",
+            isLocked=p.is_locked
+        )
+        for p in partitions
+    ]
 
 
 @router.post(
