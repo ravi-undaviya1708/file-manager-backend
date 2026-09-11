@@ -7,7 +7,10 @@ import os
 import shutil
 import tempfile
 import time
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 
@@ -247,14 +250,15 @@ async def execute_code(request: ExecutionRequest) -> ExecutionResult:
             )
         except asyncio.TimeoutError:
             timed_out = True
-            try:
-                # Terminate tree if process is still running
-                parent = psutil.Process(proc.pid)
-                for child in parent.children(recursive=True):
-                    child.kill()
-                parent.kill()
-            except Exception:
-                pass
+            if psutil:
+                try:
+                    # Terminate tree if process is still running
+                    parent = psutil.Process(proc.pid)
+                    for child in parent.children(recursive=True):
+                        child.kill()
+                    parent.kill()
+                except Exception:
+                    pass
             try:
                 proc.kill()
             except Exception:

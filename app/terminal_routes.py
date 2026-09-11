@@ -11,7 +11,11 @@ import shutil
 from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
-from ptyprocess import PtyProcessUnicode
+
+try:
+    from ptyprocess import PtyProcessUnicode
+except ImportError:
+    PtyProcessUnicode = None
 
 from app.auth import decode_access_token
 from app.models import User, FileSystemItem
@@ -202,6 +206,12 @@ alias cls="clear"
             f.write(zsh_rc_content)
     else:
         shell_args = [shell, "--rcfile", rc_file_path, "-i"]
+
+    if not PtyProcessUnicode:
+        await websocket.send_text("\r\n\x1b[33mInteractive PTY terminal requires a POSIX environment (Linux/macOS).\x1b[0m\r\n")
+        await websocket.close()
+        shutil.rmtree(sandbox_base, ignore_errors=True)
+        return
 
     try:
         pty_proc = PtyProcessUnicode.spawn(
