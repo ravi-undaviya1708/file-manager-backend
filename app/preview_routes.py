@@ -6,16 +6,10 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+import jwt
 import anyio
 
-from app.auth import (
-    get_current_user,
-    decode_access_token,
-    jwt_encode,
-    jwt_decode,
-    PyJWTError,
-    ExpiredSignatureError,
-)
+from app.auth import get_current_user, decode_access_token
 from app.config import get_settings
 from app.models import User, FileSystemItem
 from app.b2 import get_user_b2_prefix, get_item_path, get_b2_client
@@ -34,24 +28,24 @@ def create_preview_token(user_id: str, folder_id: str) -> str:
         "scope": "codespace_preview",
         "exp": datetime.now(timezone.utc) + timedelta(minutes=PREVIEW_TOKEN_EXP_MINUTES),
     }
-    return jwt_encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
 def verify_preview_token(token: str, folder_id: str) -> str:
     """Validate token and ensure it has not expired and matches folder."""
     try:
-        payload = jwt_decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
         if payload.get("scope") != "codespace_preview":
             raise HTTPException(status_code=403, detail="Invalid token scope")
         if payload.get("folder_id") != folder_id:
             raise HTTPException(status_code=403, detail="Token mismatch for this workspace folder")
         return payload.get("sub", "")
-    except ExpiredSignatureError:
+    except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=401,
             detail="Preview session has expired. Please launch a new preview from the Codespace editor."
         )
-    except PyJWTError:
+    except jwt.PyJWTError:
         raise HTTPException(status_code=403, detail="Invalid preview session token.")
 
 
