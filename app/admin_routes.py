@@ -84,19 +84,28 @@ async def admin_required(current_user: User = Depends(get_current_user)) -> User
 async def list_users(admin: User = Depends(admin_required)):
     """Retrieve details of all registered users with space usage statistics."""
     users = await User.find_all().to_list()
+    if not users:
+        return []
+
+    # Single aggregation query to fetch file counts and space used for all users in O(1)
+    pipeline = [
+        {"$match": {"type": "file", "is_deleted": False, "user_id": {"$ne": None}}},
+        {"$group": {
+            "_id": "$user_id",
+            "total_files": {"$sum": 1},
+            "space_used": {"$sum": "$size"}
+        }}
+    ]
+    cursor = FileSystemItem.get_motor_collection().aggregate(pipeline)
+    stats_list = await cursor.to_list(length=10000)
+    stats_map = {str(s["_id"]): s for s in stats_list if s.get("_id")}
+
     response = []
-    
     for u in users:
         user_id_str = str(u.id)
-        # Count all files belonging to this user
-        files = await FileSystemItem.find(
-            FileSystemItem.user_id == user_id_str,
-            FileSystemItem.type == "file",
-            FileSystemItem.is_deleted == False
-        ).to_list()
-        
-        total_files = len(files)
-        space_used = sum(f.size or 0 for f in files)
+        user_stats = stats_map.get(user_id_str, {})
+        total_files = user_stats.get("total_files", 0)
+        space_used = user_stats.get("space_used", 0)
         
         response.append(
             AdminUserResponse(

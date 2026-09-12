@@ -142,7 +142,7 @@ async def list_items(
         if await is_access_blocked(parent_folder, parent_owner, unlocked_passwords):
             raise HTTPException(status_code=403, detail={"error": "Access to locked folder denied."})
 
-    if all or (parent_id is None and not any([bin, safe, shared, category, search, starred, partition_id])):
+    if all:
         items = await crud.get_accessible_items(user_id_str, user_email)
     else:
         items, _, _, _ = await crud.get_folder_children_paginated(
