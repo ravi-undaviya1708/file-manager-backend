@@ -144,19 +144,22 @@ async def seed_database() -> None:
     # 1. Seed default system roles
     await seed_roles()
 
-    # 2. Ensure testraj@yopmail.com has superAdmin role
+    # 2. Check for optional initial admin email from environment
+    import os
     from app.models import User
-    super_admin_user = await User.find_one(User.email == "testraj@yopmail.com")
-    if super_admin_user:
-        needs_save = False
-        if super_admin_user.user_type != "superAdmin":
-            super_admin_user.user_type = "superAdmin"
-            needs_save = True
-        if not super_admin_user.is_admin:
-            super_admin_user.is_admin = True
-            needs_save = True
-        if needs_save:
-            await super_admin_user.save()
+    admin_email = os.getenv("INITIAL_ADMIN_EMAIL", "").strip().lower()
+    if admin_email:
+        super_admin_user = await User.find_one(User.email == admin_email)
+        if super_admin_user:
+            needs_save = False
+            if super_admin_user.user_type != "superAdmin":
+                super_admin_user.user_type = "superAdmin"
+                needs_save = True
+            if not super_admin_user.is_admin:
+                super_admin_user.is_admin = True
+                needs_save = True
+            if needs_save:
+                await super_admin_user.save()
 
     count = await FileSystemItem.count()
     if count > 0:

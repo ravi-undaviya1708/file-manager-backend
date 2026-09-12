@@ -76,7 +76,7 @@ async def run_code_endpoint(
         
         filename = item.name
         if not language:
-            language = detect_language_from_language = detect_language_from_filename(filename)
+            language = detect_language_from_filename(filename)
 
         if code_to_run is None:
             # Fetch content from B2

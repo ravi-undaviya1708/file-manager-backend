@@ -56,6 +56,12 @@ async def move_b2_prefix_async(old_prefix: str, new_prefix: str) -> bool:
     return await anyio.to_thread.run_sync(move_b2_prefix, old_prefix, new_prefix)
 
 
+async def copy_b2_object_async(old_key: str, new_key: str) -> bool:
+    """Copy an object inside B2 asynchronously."""
+    import anyio
+    return await anyio.to_thread.run_sync(copy_b2_object, old_key, new_key)
+
+
 async def create_b2_folder_async(folder_path: str) -> bool:
     """Create a folder placeholder in B2 asynchronously."""
     return await create_b2_object_async(f"{folder_path}/.keep", b"")
@@ -105,7 +111,7 @@ def generate_presigned_url(key: str, expires_in: int = 3600) -> str:
         return ""
 
 
-async def get_item_path(item: FileSystemItem, user_id: str) -> str:
+async def get_item_path(item: FileSystemItem, user_id: Optional[str] = None) -> str:
     """Recursively resolve the full directory path for a database item."""
     parts = []
     current = item
@@ -118,13 +124,16 @@ async def get_item_path(item: FileSystemItem, user_id: str) -> str:
             break
         visited.add(parent_id)
         
-        # Look up parent folder
+        # Look up parent folder by ID
         from beanie import PydanticObjectId
         parent = None
         try:
-            parent = await FileSystemItem.find_one({"_id": PydanticObjectId(parent_id), "user_id": user_id})
+            parent = await FileSystemItem.get(PydanticObjectId(parent_id))
         except Exception:
-            parent = await FileSystemItem.find_one({"_id": parent_id, "user_id": user_id})
+            try:
+                parent = await FileSystemItem.get(parent_id)
+            except Exception:
+                pass
         
         current = parent
         

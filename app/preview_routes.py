@@ -22,17 +22,23 @@ PREVIEW_TOKEN_EXP_MINUTES = 60  # 1 hour preview session TTL
 
 def create_preview_token(user_id: str, folder_id: str) -> str:
     """Generate a signed preview JWT with short TTL."""
+    if not settings.JWT_SECRET_KEY:
+        raise RuntimeError("JWT_SECRET_KEY is not configured in application settings.")
+    now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "folder_id": folder_id,
         "scope": "codespace_preview",
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=PREVIEW_TOKEN_EXP_MINUTES),
+        "iat": now,
+        "exp": now + timedelta(minutes=PREVIEW_TOKEN_EXP_MINUTES),
     }
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
 def verify_preview_token(token: str, folder_id: str) -> str:
     """Validate token and ensure it has not expired and matches folder."""
+    if not settings.JWT_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="JWT secret key is not configured")
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
         if payload.get("scope") != "codespace_preview":
@@ -45,7 +51,7 @@ def verify_preview_token(token: str, folder_id: str) -> str:
             status_code=401,
             detail="Preview session has expired. Please launch a new preview from the Codespace editor."
         )
-    except jwt.PyJWTError:
+    except (jwt.InvalidTokenError, jwt.PyJWTError):
         raise HTTPException(status_code=403, detail="Invalid preview session token.")
 
 
