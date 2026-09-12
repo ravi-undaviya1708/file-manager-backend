@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings
@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     B2_APPLICATION_KEY: str = ""
     B2_BUCKET: str = ""
     B2_ENDPOINT: str = ""
+
+    # Contact & Support Email Configuration
+    CONTACT_EMAIL: str = "binarytechinfo@gmail.com"
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
 
     @property
     def cors_origins_list(self) -> List[str]:
