@@ -16,6 +16,7 @@ from app.workspace_routes import router as workspace_router
 from app.execution_routes import router as execution_router
 from app.terminal_routes import router as terminal_router
 from app.preview_routes import router as preview_router
+from app.contact_routes import router as contact_router
 from app.seed import seed_database
 
 settings = get_settings()
@@ -59,6 +60,7 @@ app.include_router(workspace_router)
 app.include_router(execution_router)
 app.include_router(terminal_router)
 app.include_router(preview_router)
+app.include_router(contact_router)
 app.include_router(router)
 
 
