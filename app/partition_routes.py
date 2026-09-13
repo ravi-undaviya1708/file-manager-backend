@@ -30,10 +30,10 @@ async def _to_partition_response(partition: StoragePartition, used_size: Optiona
     return PartitionResponse(
         id=str(partition.id),
         name=partition.name,
-        allocatedSizeBytes=partition.allocated_size_bytes,
-        usedSizeBytes=used_size,
-        createdAt=partition.created_at.isoformat() if partition.created_at else "",
-        isLocked=partition.is_locked
+        allocatedSizeBytes=getattr(partition, "allocated_size_bytes", 0) or 0,
+        usedSizeBytes=used_size or 0,
+        createdAt=partition.created_at.isoformat() if getattr(partition, "created_at", None) else "",
+        isLocked=bool(getattr(partition, "is_locked", False))
     )
 
 
@@ -59,10 +59,10 @@ async def list_partitions(current_user: User = Depends(get_current_user)):
         PartitionResponse(
             id=str(p.id),
             name=p.name,
-            allocatedSizeBytes=p.allocated_size_bytes,
+            allocatedSizeBytes=getattr(p, "allocated_size_bytes", 0) or 0,
             usedSizeBytes=used_map.get(str(p.id), 0),
-            createdAt=p.created_at.isoformat() if p.created_at else "",
-            isLocked=p.is_locked
+            createdAt=p.created_at.isoformat() if getattr(p, "created_at", None) else "",
+            isLocked=bool(getattr(p, "is_locked", False))
         )
         for p in partitions
     ]

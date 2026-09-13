@@ -168,3 +168,48 @@ class TestSharingSecurityPartitions:
         with pytest.raises(HTTPException) as exc:
             await create_partition(overflow_req, user_a)
         assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
+
+    async def test_multiple_partitions_and_legacy_records(self, user_a, user_b):
+        """Verify multiple partitions list correctly and legacy records don't crash."""
+        uid_a = str(user_a.id)
+
+        # 1. User B has zero partitions -> returns empty list
+        bob_empty = await list_partitions(user_b)
+        assert bob_empty == []
+
+        # 2. Add multiple partitions for Alice
+        part1 = StoragePartition(
+            user_id=uid_a,
+            name="Partition Alpha",
+            allocated_size_bytes=1000000,
+        )
+        await part1.insert()
+
+        part2 = StoragePartition(
+            user_id=uid_a,
+            name="Partition Beta",
+            allocated_size_bytes=2000000,
+        )
+        await part2.insert()
+
+        # 3. List Alice partitions -> should return both
+        alice_all = await list_partitions(user_a)
+        assert len(alice_all) >= 2
+        names = [p.name for p in alice_all]
+        assert "Partition Alpha" in names
+        assert "Partition Beta" in names
+
+        # 4. Legacy partition with None/missing fields
+        legacy_partition = StoragePartition(
+            user_id=uid_a,
+            name="Legacy Partition",
+            allocated_size_bytes=500000,
+            is_locked=False,
+            lock_password_hash=None,
+        )
+        resp = await _to_partition_response(legacy_partition)
+        assert resp.id == str(legacy_partition.id)
+        assert resp.name == "Legacy Partition"
+        assert resp.allocatedSizeBytes == 500000
+        assert resp.usedSizeBytes == 0
+        assert resp.isLocked is False
