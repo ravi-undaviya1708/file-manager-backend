@@ -44,28 +44,35 @@ async def _to_partition_response(partition: StoragePartition, used_size: Optiona
 )
 async def list_partitions(current_user: User = Depends(get_current_user)):
     """Retrieve all storage partitions created by the current user using batched aggregation."""
-    user_id_str = str(current_user.id)
-    partitions = await StoragePartition.find(
-        StoragePartition.user_id == user_id_str
-    ).to_list()
-    
-    if not partitions:
-        return []
+    try:
+        user_id_str = str(current_user.id)
+        partitions = await StoragePartition.find(
+            StoragePartition.user_id == user_id_str
+        ).to_list()
+        
+        if not partitions:
+            return []
 
-    from app.crud import get_all_partitions_used_sizes
-    used_map = await get_all_partitions_used_sizes(user_id_str)
-    
-    return [
-        PartitionResponse(
-            id=str(p.id),
-            name=p.name,
-            allocatedSizeBytes=getattr(p, "allocated_size_bytes", 0) or 0,
-            usedSizeBytes=used_map.get(str(p.id), 0),
-            createdAt=p.created_at.isoformat() if getattr(p, "created_at", None) else "",
-            isLocked=bool(getattr(p, "is_locked", False))
+        from app.crud import get_all_partitions_used_sizes
+        used_map = await get_all_partitions_used_sizes(user_id_str)
+        
+        return [
+            PartitionResponse(
+                id=str(p.id),
+                name=p.name,
+                allocatedSizeBytes=getattr(p, "allocated_size_bytes", 0) or 0,
+                usedSizeBytes=used_map.get(str(p.id), 0),
+                createdAt=p.created_at.isoformat() if getattr(p, "created_at", None) else "",
+                isLocked=bool(getattr(p, "is_locked", False))
+            )
+            for p in partitions
+        ]
+    except Exception as e:
+        import traceback
+        raise HTTPException(
+            status_code=500,
+            detail={"error": str(e), "trace": traceback.format_exc()}
         )
-        for p in partitions
-    ]
 
 
 @router.post(
