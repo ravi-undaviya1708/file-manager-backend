@@ -70,4 +70,4 @@ app.include_router(router)
 @app.get("/health", tags=["Health"])
 async def health_check():
     """Simple health check endpoint."""
-    return {"status": "healthy", "database": "MongoDB Atlas", "version": "1.0.0"}
+    return {"status": "healthy", "database": "MongoDB Atlas", "version": "1.0.1"}
