@@ -310,8 +310,7 @@ async def get_user_storage_size(user_id: str) -> int:
         {"$match": {"user_id": user_id, "type": "file"}},
         {"$group": {"_id": None, "total_size": {"$sum": "$size"}}}
     ]
-    cursor = FileSystemItem.get_motor_collection().aggregate(pipeline)
-    results = await cursor.to_list(length=1)
+    results = await FileSystemItem.aggregate(pipeline).to_list()
     if results and "total_size" in results[0]:
         return int(results[0]["total_size"] or 0)
     return 0
@@ -335,9 +334,8 @@ async def get_all_partitions_used_sizes(user_id: str) -> Dict[str, int]:
             }
         }
     ]
-    cursor = FileSystemItem.get_motor_collection().aggregate(pipeline)
-    results = await cursor.to_list(length=500)
-    return {str(r["_id"]): int(r["used_size"] or 0) for r in results if r["_id"]}
+    results = await FileSystemItem.aggregate(pipeline).to_list()
+    return {str(r["_id"]): int(r["used_size"] or 0) for r in results if r.get("_id")}
 
 
 async def _update_descendant_partitions(root_id: str, user_id: str, new_partition_id: Optional[str]) -> None:

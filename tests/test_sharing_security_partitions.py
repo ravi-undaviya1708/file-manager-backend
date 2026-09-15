@@ -213,3 +213,58 @@ class TestSharingSecurityPartitions:
         assert resp.allocatedSizeBytes == 500000
         assert resp.usedSizeBytes == 0
         assert resp.isLocked is False
+
+    async def test_partition_aggregation_and_endpoint_regression(self, user_a, user_b):
+        """Verify partition aggregation executes without AttributeError and respects deleted flags and user isolation."""
+        uid_a = str(user_a.id)
+        uid_b = str(user_b.id)
+
+        # 1. User with no partitions
+        empty_map = await crud.get_all_partitions_used_sizes(uid_b)
+        assert empty_map == {}
+
+        # 2. Create partition for Alice
+        part_a = StoragePartition(
+            user_id=uid_a,
+            name="Alice Partition",
+            allocated_size_bytes=3000000,
+        )
+        await part_a.insert()
+        part_a_id = str(part_a.id)
+
+        # 3. Add active and deleted files in partition
+        await crud.create_item("doc1.pdf", "file", uid_a, size=100000, partition_id=part_a_id)
+        await crud.create_item("doc2.pdf", "file", uid_a, size=200000, partition_id=part_a_id)
+        deleted_file = await crud.create_item("doc3.pdf", "file", uid_a, size=500000, partition_id=part_a_id)
+        await crud.soft_delete_item(str(deleted_file.id), uid_a)
+
+        # 4. Create partition for Bob
+        part_b = StoragePartition(
+            user_id=uid_b,
+            name="Bob Partition",
+            allocated_size_bytes=3000000,
+        )
+        await part_b.insert()
+        part_b_id = str(part_b.id)
+        await crud.create_item("bob_doc.pdf", "file", uid_b, size=400000, partition_id=part_b_id)
+
+        # 5. Verify Alice's used size: 100000 + 200000 = 300000 (excludes deleted 500000 and excludes Bob's 400000)
+        alice_used_map = await crud.get_all_partitions_used_sizes(uid_a)
+        assert alice_used_map.get(part_a_id) == 300000
+        assert part_b_id not in alice_used_map
+
+        # 6. Verify Bob's used size: 400000
+        bob_used_map = await crud.get_all_partitions_used_sizes(uid_b)
+        assert bob_used_map.get(part_b_id) == 400000
+        assert part_a_id not in bob_used_map
+
+        # 7. Test list_partitions endpoint directly
+        alice_resps = await list_partitions(user_a)
+        assert len(alice_resps) == 1
+        assert alice_resps[0].id == part_a_id
+        assert alice_resps[0].usedSizeBytes == 300000
+
+        bob_resps = await list_partitions(user_b)
+        assert len(bob_resps) == 1
+        assert bob_resps[0].id == part_b_id
+        assert bob_resps[0].usedSizeBytes == 400000

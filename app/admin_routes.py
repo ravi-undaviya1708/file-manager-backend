@@ -96,8 +96,7 @@ async def list_users(admin: User = Depends(admin_required)):
             "space_used": {"$sum": "$size"}
         }}
     ]
-    cursor = FileSystemItem.get_motor_collection().aggregate(pipeline)
-    stats_list = await cursor.to_list(length=10000)
+    stats_list = await FileSystemItem.aggregate(pipeline).to_list()
     stats_map = {str(s["_id"]): s for s in stats_list if s.get("_id")}
 
     response = []
