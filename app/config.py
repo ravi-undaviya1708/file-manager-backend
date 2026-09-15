@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     B2_ENDPOINT: str = ""
 
     # Contact & Support Email Configuration
-    CONTACT_EMAIL: str = "binarytechinfo@gmail.com"
+    CONTACT_EMAIL: str = "undaviyaraj2000@gmail.com"
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 587
     SMTP_USER: Optional[str] = None

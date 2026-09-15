@@ -34,7 +34,7 @@ class ContactResponse(BaseModel):
 def send_contact_email_task(name: str, email: str, subject: str, message: str, timestamp_iso: str):
     """Background task to deliver contact inquiry to support."""
     settings = get_settings()
-    recipient = getattr(settings, "CONTACT_EMAIL", "binarytechinfo@gmail.com") or "binarytechinfo@gmail.com"
+    recipient = getattr(settings, "CONTACT_EMAIL", "undaviyaraj2000@gmail.com") or "undaviyaraj2000@gmail.com"
     email_subject = f"GetFileNova Contact — {subject} ({name})"
 
     body_text = f"""New Contact Inquiry received on GetFileNova:
