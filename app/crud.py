@@ -304,13 +304,40 @@ async def _collect_descendant_ids(root_id: str, user_id: str) -> List[str]:
     return ids
 
 
+import inspect
+
+
+async def _run_filesystem_aggregation(pipeline: list, length: int = 1000) -> list:
+    """Run an async MongoDB aggregation query safely across all Beanie, Motor, and PyMongo driver environments."""
+    col_func = getattr(FileSystemItem, "get_pymongo_collection", None) or getattr(FileSystemItem, "get_motor_collection", None)
+    if col_func is not None:
+        collection = col_func()
+    else:
+        from app.database import database
+        collection = database["file_system_items"]
+
+    raw = collection.aggregate(pipeline)
+    if inspect.isawaitable(raw):
+        cursor = await raw
+    else:
+        cursor = raw
+
+    if hasattr(cursor, "to_list"):
+        return await cursor.to_list(length=length)
+    elif hasattr(cursor, "__aiter__"):
+        return [doc async for doc in cursor]
+    elif hasattr(cursor, "__iter__"):
+        return list(cursor)
+    return []
+
+
 async def get_user_storage_size(user_id: str) -> int:
     """Calculate the total size in bytes of all files for a user using MongoDB aggregation in O(1) time."""
     pipeline = [
         {"$match": {"user_id": user_id, "type": "file"}},
         {"$group": {"_id": None, "total_size": {"$sum": "$size"}}}
     ]
-    results = await FileSystemItem.aggregate(pipeline).to_list()
+    results = await _run_filesystem_aggregation(pipeline, length=1)
     if results and "total_size" in results[0]:
         return int(results[0]["total_size"] or 0)
     return 0
@@ -334,7 +361,7 @@ async def get_all_partitions_used_sizes(user_id: str) -> Dict[str, int]:
             }
         }
     ]
-    results = await FileSystemItem.aggregate(pipeline).to_list()
+    results = await _run_filesystem_aggregation(pipeline, length=500)
     return {str(r["_id"]): int(r["used_size"] or 0) for r in results if r.get("_id")}
 
 

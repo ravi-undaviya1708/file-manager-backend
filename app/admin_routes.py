@@ -96,7 +96,8 @@ async def list_users(admin: User = Depends(admin_required)):
             "space_used": {"$sum": "$size"}
         }}
     ]
-    stats_list = await FileSystemItem.aggregate(pipeline).to_list()
+    from app.crud import _run_filesystem_aggregation
+    stats_list = await _run_filesystem_aggregation(pipeline, length=10000)
     stats_map = {str(s["_id"]): s for s in stats_list if s.get("_id")}
 
     response = []
