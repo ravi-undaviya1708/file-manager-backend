@@ -441,7 +441,10 @@ async def check_and_sync_user(user_id: str):
 # ─── 2-Way Synchronization on Refresh ───
 
 def fetch_b2_state(prefix: str):
-    """Fetch files and folders structure from B2 under prefix (synchronous, blocking)."""
+    """Fetch files and folders structure from B2 under prefix (synchronous, blocking).
+    
+    Returns (b2_folders, b2_files) on success, or raises an Exception on failure.
+    """
     client = get_b2_client()
     paginator = client.get_paginator("list_objects_v2")
     pages = paginator.paginate(Bucket=settings.B2_BUCKET, Prefix=f"{prefix}/")
@@ -483,7 +486,7 @@ async def sync_b2_to_mongodb(user_id: str):
     - Parse relative file paths and folder structures.
     - Create folders/files in MongoDB if they exist in B2 but not in MongoDB.
     - Update changed file sizes in MongoDB.
-    - Remove folders/files from MongoDB if they are absent in B2 (excluding soft-deleted items).
+    - Safely soft-prune or log MongoDB items that are absent in B2.
     """
     logger.info(f"B2: Starting 2-way sync for user '{user_id}'...")
     prefix = await get_user_b2_prefix(user_id)
@@ -492,11 +495,19 @@ async def sync_b2_to_mongodb(user_id: str):
         import anyio
         b2_folders, b2_files = await anyio.to_thread.run_sync(fetch_b2_state, prefix)
     except Exception as e:
-        logger.error(f"B2 Error listing objects for user '{user_id}': {e}")
+        logger.error(f"B2 Error listing objects for user '{user_id}': {e}. Aborting sync to prevent data loss.")
         return
 
     # Fetch all MongoDB items for this user
     db_items = await FileSystemItem.find(FileSystemItem.user_id == user_id).to_list()
+    
+    # Safety check: If B2 returns completely empty but MongoDB has items, abort pruning to prevent catastrophic loss
+    if len(b2_files) == 0 and len(b2_folders) == 0 and len(db_items) > 0:
+        logger.warning(
+            f"B2 returned 0 objects for user '{user_id}' while MongoDB has {len(db_items)} items. "
+            "Skipping pruning step to safeguard against transient B2 listing errors."
+        )
+        return
     
     # Map item IDs to items for quick lookup
     db_items_by_id = {str(item.id): item for item in db_items}

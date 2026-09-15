@@ -25,6 +25,12 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: connect to MongoDB on startup, close on shutdown."""
+    import logging
+    app_logger = logging.getLogger("app")
+    
+    if settings.APP_ENV.lower() == "production" and settings.JWT_SECRET_KEY == "supersecretkeyforlocaldevelopmentfilestoreapp":
+        app_logger.critical("SECURITY WARNING: Using default development JWT_SECRET_KEY in production mode!")
+        
     await init_db()
     await seed_database()
     yield
