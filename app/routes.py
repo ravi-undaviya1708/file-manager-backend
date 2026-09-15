@@ -138,6 +138,8 @@ async def list_items(
         parent_folder = await FileSystemItem.get(parent_id)
         if not parent_folder or parent_folder.type != "folder":
             raise HTTPException(status_code=404, detail={"error": "Folder not found."})
+        from app.security_helpers import verify_read_access
+        await verify_read_access(parent_folder, current_user)
         parent_owner = parent_folder.user_id if parent_folder.user_id else user_id_str
         if await is_access_blocked(parent_folder, parent_owner, unlocked_passwords):
             raise HTTPException(status_code=403, detail={"error": "Access to locked folder denied."})

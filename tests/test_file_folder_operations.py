@@ -163,3 +163,89 @@ class TestFolderFileOperations:
         # Attempting to upload 400000 more exceeds 1000000 limit
         new_file_size = 400000
         assert (total_used + new_file_size) > sample_user.storage_limit_bytes
+
+    async def test_regression_documents_work_testak_exact_hierarchy(self, sample_user):
+        """Exact reproduction of Root -> Documents -> [Work, testak] hierarchy with lazy loading."""
+        uid = str(sample_user.id)
+        email = sample_user.email
+
+        # 1. Create Root -> Documents
+        docs = await crud.create_item("Documents", "folder", uid, parent_id=None)
+        assert docs.parent_id is None
+
+        # 2. Create Documents -> Work and Documents -> testak
+        work = await crud.create_item("Work", "folder", uid, parent_id=str(docs.id))
+        testak = await crud.create_item("testak", "folder", uid, parent_id=str(docs.id))
+        assert work.parent_id == str(docs.id)
+        assert testak.parent_id == str(docs.id)
+
+        # 3. Create Work -> ProjectFiles
+        proj = await crud.create_item("ProjectFiles", "folder", uid, parent_id=str(work.id))
+        assert proj.parent_id == str(work.id)
+
+        # 4. Query Root
+        root_items, _, _, _ = await crud.get_folder_children_paginated(
+            user_id=uid, email=email, parent_id=None
+        )
+        assert any(i.name == "Documents" for i in root_items)
+        assert not any(i.name in ("Work", "testak", "ProjectFiles") for i in root_items)
+
+        # 5. Query Documents (immediate children only)
+        doc_children, _, _, _ = await crud.get_folder_children_paginated(
+            user_id=uid, email=email, parent_id=str(docs.id)
+        )
+        child_names = {i.name for i in doc_children}
+        assert len(doc_children) == 2
+        assert "Work" in child_names
+        assert "testak" in child_names
+        assert "ProjectFiles" not in child_names
+
+        # 6. Query Work (immediate children only)
+        work_children, _, _, _ = await crud.get_folder_children_paginated(
+            user_id=uid, email=email, parent_id=str(work.id)
+        )
+        assert len(work_children) == 1
+        assert work_children[0].name == "ProjectFiles"
+
+    async def test_regression_user_isolation_and_deleted_exclusion(self, sample_user):
+        """Verify user isolation and deleted folder exclusion for nested queries."""
+        uid_a = str(sample_user.id)
+        email_a = sample_user.email
+
+        user_b = User(
+            name="User B",
+            email="user_b@getfilenova.com",
+            hashed_password=hash_password("Pass1234!"),
+        )
+        await user_b.insert()
+        uid_b = str(user_b.id)
+        email_b = user_b.email
+
+        # User A creates Root -> Documents -> Work
+        docs_a = await crud.create_item("Documents", "folder", uid_a, parent_id=None)
+        work_a = await crud.create_item("Work", "folder", uid_a, parent_id=str(docs_a.id))
+        deleted_child = await crud.create_item("OldWork", "folder", uid_a, parent_id=str(docs_a.id))
+        await crud.soft_delete_item(str(deleted_child.id), uid_a)
+
+        # Query Documents for User A -> deleted folder excluded
+        doc_children, _, _, _ = await crud.get_folder_children_paginated(
+            user_id=uid_a, email=email_a, parent_id=str(docs_a.id)
+        )
+        names = [i.name for i in doc_children]
+        assert "Work" in names
+        assert "OldWork" not in names
+
+        # Query Documents for User B -> User B has no access to User A's private folder
+        from fastapi import HTTPException
+        from app.routes import list_items
+        from unittest.mock import MagicMock
+        req = MagicMock(spec=Request)
+        req.cookies = {}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await list_items(
+                request=req,
+                parent_id=str(docs_a.id),
+                current_user=user_b,
+            )
+        assert exc_info.value.status_code in (403, 404)
