@@ -143,6 +143,10 @@ async def register(body: UserRegisterRequest, background_tasks: BackgroundTasks)
     from app.b2 import check_and_sync_user
     background_tasks.add_task(check_and_sync_user, str(user.id))
 
+    # Notify admin of new registration in the background
+    from app.email_service import send_new_registration_notification
+    background_tasks.add_task(send_new_registration_notification, user, "Email/Password")
+
     # Generate JWT token
     token = create_access_token(data={"sub": str(user.id)})
 

@@ -39,10 +39,27 @@ class Settings(BaseSettings):
 
     # Contact & Support Email Configuration
     CONTACT_EMAIL: str = "undaviyaraj2000@gmail.com"
+
+    # SMTP Server & Admin Notification Configuration
+    ADMIN_NOTIFICATION_EMAIL: Optional[str] = None
+    ADMIN_NOTIFICATIONS_ENABLED: bool = True
     SMTP_HOST: Optional[str] = None
-    SMTP_PORT: int = 587
+    SMTP_PORT: int = 465
+    SMTP_USERNAME: Optional[str] = None
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM_EMAIL: Optional[str] = None
+    SMTP_FROM_NAME: str = "GetFileNova"
+
+    @property
+    def effective_smtp_user(self) -> Optional[str]:
+        """Return configured SMTP username with fallback to legacy SMTP_USER."""
+        return self.SMTP_USERNAME or self.SMTP_USER
+
+    @property
+    def effective_from_email(self) -> Optional[str]:
+        """Return configured From email address with fallback to SMTP username."""
+        return self.SMTP_FROM_EMAIL or self.effective_smtp_user
 
     @property
     def cors_origins_list(self) -> List[str]:
