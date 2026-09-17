@@ -5,7 +5,7 @@ import pytest_asyncio
 from mongomock_motor import AsyncMongoMockClient
 from beanie import init_beanie
 
-from app.models import User, FileSystemItem, StoragePartition, Role, PaymentRecord
+from app.models import User, FileSystemItem, StoragePartition, Role, PaymentRecord, CancellationRecord
 import app.database
 
 
@@ -19,7 +19,7 @@ async def init_test_database():
 
     await init_beanie(
         database=db,
-        document_models=[FileSystemItem, User, StoragePartition, Role, PaymentRecord],
+        document_models=[FileSystemItem, User, StoragePartition, Role, PaymentRecord, CancellationRecord],
     )
     yield db
     # Teardown
@@ -28,3 +28,4 @@ async def init_test_database():
     await StoragePartition.find_all().delete()
     await Role.find_all().delete()
     await PaymentRecord.find_all().delete()
+    await CancellationRecord.find_all().delete()

@@ -30,6 +30,8 @@ class User(Document):
     trial_started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     trial_expires_at: Optional[datetime] = Field(default=None)
     subscription_expires_at: Optional[datetime] = Field(default=None)
+    canceled_at: Optional[datetime] = Field(default=None)
+    cancellation_reason: Optional[str] = Field(default=None)
     customer_id: Optional[str] = Field(default=None)
     phone: Optional[str] = Field(default=None)
 
@@ -39,6 +41,9 @@ class User(Document):
             "email",
             "google_id",
             "customer_id",
+            "created_at",
+            "pricing_plan",
+            "subscription_status",
         ]
 
     def __repr__(self) -> str:
@@ -206,4 +211,29 @@ class PaymentRecord(Document):
 
     def __repr__(self) -> str:
         return f"<PaymentRecord(id={self.id}, user_id={self.user_id}, order_id={self.order_id}, status={self.status})>"
+
+
+class CancellationRecord(Document):
+    """Represents a subscription or trial cancellation record."""
+
+    user_id: str = Field(..., max_length=255)
+    customer_name: str = Field(default="", max_length=255)
+    customer_email: str = Field(default="", max_length=255)
+    plan_name: str = Field(default="free", max_length=50)
+    billing_cycle: str = Field(default="monthly", max_length=20)
+    is_trial: bool = Field(default=False)
+    reason: Optional[str] = Field(default="User requested cancellation")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Settings:
+        name = "cancellation_records"
+        indexes = [
+            "user_id",
+            "customer_email",
+            "plan_name",
+            "created_at",
+        ]
+
+    def __repr__(self) -> str:
+        return f"<CancellationRecord(id={self.id}, user_id={self.user_id}, plan={self.plan_name}, is_trial={self.is_trial})>"
 

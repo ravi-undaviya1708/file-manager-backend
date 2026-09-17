@@ -303,10 +303,13 @@ def send_new_registration_notification(
         registered_at_str=formatted_time,
         registration_method=registration_method,
     )
-
-    return send_smtp_email(
-        to_email=recipient,
-        subject=subject,
-        plain_text=plain_text,
-        html_content=html_body,
-    )
+    try:
+        return send_smtp_email(
+            to_email=recipient,
+            subject=subject,
+            plain_text=plain_text,
+            html_content=html_body,
+        )
+    except Exception as exc:
+        logger.warning("Failed to send new user registration notification email to %s: %s", recipient, exc)
+        return False
