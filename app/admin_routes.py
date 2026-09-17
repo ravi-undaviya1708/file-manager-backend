@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
@@ -11,6 +12,8 @@ from pydantic import BaseModel, EmailStr, Field
 from app.auth import get_current_user
 from app.models import User, FileSystemItem, StoragePartition, PaymentRecord, CancellationRecord, Role
 import app.database
+
+logger = logging.getLogger("app.admin_routes")
 
 router = APIRouter(prefix="/api/admin", tags=["Super Admin"])
 
@@ -230,20 +233,32 @@ class CountryItem(BaseModel):
     percentage: float
 
 
+class EventAnalyticsItem(BaseModel):
+    eventName: str
+    eventCount: int
+    keyEvents: int = 0
+
+
 class GoogleAnalyticsResponse(BaseModel):
     propertyId: str
     status: str
+    isRealtimeActive: bool = True
+    dateRange: str = "30d"
+    updatedAt: Optional[str] = None
+    realtime: Optional[Dict[str, Any]] = None
     realtimeActiveUsers: int
     totalUsers: int
     newUsers: int
     sessions: int
     pageviews: int
     avgSessionDuration: str
+    avgSessionDurationSeconds: Optional[float] = None
     bounceRate: float
     trafficSources: List[TrafficSourceItem]
     topPages: List[TopPageItem]
     deviceDistribution: List[DeviceItem]
     countryDistribution: List[CountryItem]
+    events: List[EventAnalyticsItem] = []
 
 
 # ── Req/Res Schemas ──────────────────────────────────────────────────────────
@@ -1208,51 +1223,32 @@ async def get_payments_overview(admin: User = Depends(admin_required)):
     response_model=GoogleAnalyticsResponse,
     summary="Get Google Analytics 4 report telemetry"
 )
-async def get_google_analytics_report(admin: User = Depends(admin_required)):
-    """Retrieve Google Analytics 4 performance metrics, traffic sources, and device statistics."""
-    all_users = await User.count()
-    active_now = max(3, int(all_users * 0.45))
-    total_visitors = max(all_users * 14, 184)
-    sessions = int(total_visitors * 1.62)
-    pageviews = int(sessions * 3.8)
+async def get_google_analytics_report(
+    range: str = Query("30d", description="Date range: today, yesterday, 7d, 30d, 90d"),
+    refresh: bool = Query(False, description="Force refresh and bypass cache"),
+    admin: User = Depends(admin_required)
+):
+    """Retrieve real Google Analytics 4 performance metrics, traffic sources, device statistics, and events.
+    Strictly adheres to Zero Mock Policy: returns real Data API telemetry or actionable error details."""
+    from app.google_analytics import get_google_analytics_report_data
 
-    return GoogleAnalyticsResponse(
-        propertyId="GA4-G-NV782X90LK",
-        status="CONNECTED_ACTIVE",
-        realtimeActiveUsers=active_now,
-        totalUsers=total_visitors,
-        newUsers=int(total_visitors * 0.78),
-        sessions=sessions,
-        pageviews=pageviews,
-        avgSessionDuration="3m 42s",
-        bounceRate=28.4,
-        trafficSources=[
-            TrafficSourceItem(source="Organic Search", sessions=int(sessions * 0.44), percentage=44.0, color="#4f46e5"),
-            TrafficSourceItem(source="Direct Navigation", sessions=int(sessions * 0.28), percentage=28.0, color="#3b82f6"),
-            TrafficSourceItem(source="Referral & Backlinks", sessions=int(sessions * 0.16), percentage=16.0, color="#10b981"),
-            TrafficSourceItem(source="Social Media", sessions=int(sessions * 0.08), percentage=8.0, color="#a855f7"),
-            TrafficSourceItem(source="Email Campaigns", sessions=int(sessions * 0.04), percentage=4.0, color="#f59e0b"),
-        ],
-        topPages=[
-            TopPageItem(path="/", title="GetFileNova — Secure Cloud Storage Platform", pageviews=int(pageviews * 0.38), uniquePageviews=int(sessions * 0.35), avgTime="2m 14s"),
-            TopPageItem(path="/dashboard", title="GetFileNova Drive — File Manager & Storage", pageviews=int(pageviews * 0.26), uniquePageviews=int(sessions * 0.24), avgTime="5m 30s"),
-            TopPageItem(path="/login", title="Sign In to GetFileNova Account", pageviews=int(pageviews * 0.14), uniquePageviews=int(sessions * 0.13), avgTime="0m 48s"),
-            TopPageItem(path="/register", title="Create 10-Day Free Trial Account", pageviews=int(pageviews * 0.12), uniquePageviews=int(sessions * 0.11), avgTime="1m 20s"),
-            TopPageItem(path="/dashboard/profile", title="Subscription Plans & Storage Pricing", pageviews=int(pageviews * 0.10), uniquePageviews=int(sessions * 0.09), avgTime="3m 05s"),
-        ],
-        deviceDistribution=[
-            DeviceItem(device="Desktop (macOS / Windows)", percentage=68.5, sessions=int(sessions * 0.685), color="#4f46e5"),
-            DeviceItem(device="Mobile (iOS / Android)", percentage=24.2, sessions=int(sessions * 0.242), color="#06b6d4"),
-            DeviceItem(device="Tablet (iPad / Galaxy Tab)", percentage=7.3, sessions=int(sessions * 0.073), color="#a855f7"),
-        ],
-        countryDistribution=[
-            CountryItem(country="India", code="IN", users=int(total_visitors * 0.48), percentage=48.0),
-            CountryItem(country="United States", code="US", users=int(total_visitors * 0.26), percentage=26.0),
-            CountryItem(country="United Kingdom", code="GB", users=int(total_visitors * 0.11), percentage=11.0),
-            CountryItem(country="Canada", code="CA", users=int(total_visitors * 0.08), percentage=8.0),
-            CountryItem(country="Germany", code="DE", users=int(total_visitors * 0.07), percentage=7.0),
-        ]
-    )
+    try:
+        data = get_google_analytics_report_data(date_range=range, force_refresh=refresh)
+        return GoogleAnalyticsResponse(**data)
+    except ValueError as exc:
+        logger.error("Google Analytics configuration/validation error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(exc), "code": "GA4_CONFIG_ERROR"}
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Google Analytics API request error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": f"Google Analytics service unavailable: {str(exc)}", "code": "GA4_API_ERROR"}
+        )
 
 
 # ── Management Routes ─────────────────────────────────────────────────────────

@@ -61,6 +61,30 @@ class Settings(BaseSettings):
         """Return configured From email address with fallback to SMTP username."""
         return self.SMTP_FROM_EMAIL or self.effective_smtp_user
 
+    # Google Analytics 4 (GA4) Server-Side Data API Configuration
+    GA4_PROPERTY_ID: Optional[str] = None
+    GOOGLE_SERVICE_ACCOUNT_EMAIL: Optional[str] = None
+    GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: Optional[str] = None
+    GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
+
+    @property
+    def formatted_google_private_key(self) -> Optional[str]:
+        """Normalize multiline private key string for Vercel/cloud environments (converts literal \\n to newlines)."""
+        if not self.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY:
+            return None
+        key = self.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY.strip()
+        # Remove optional surrounding quotes if present
+        if (key.startswith('"') and key.endswith('"')) or (key.startswith("'") and key.endswith("'")):
+            key = key[1:-1]
+        return key.replace("\\n", "\n")
+
+    @property
+    def is_ga4_configured(self) -> bool:
+        """Check if minimum required credentials for GA4 Data API are present."""
+        has_direct_creds = bool(self.GA4_PROPERTY_ID and self.GOOGLE_SERVICE_ACCOUNT_EMAIL and self.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY)
+        has_file_creds = bool(self.GA4_PROPERTY_ID and self.GOOGLE_APPLICATION_CREDENTIALS)
+        return has_direct_creds or has_file_creds
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
