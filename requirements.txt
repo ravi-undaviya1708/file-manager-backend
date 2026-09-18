@@ -18,6 +18,7 @@ puremagic==1.30
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 mongomock-motor>=0.0.36
-google-analytics-data>=0.23.0
+google-analytics-data>=0.18.0
 google-auth>=2.20.0
 cryptography>=50.0.0
+eval-type-backport>=0.2.0
