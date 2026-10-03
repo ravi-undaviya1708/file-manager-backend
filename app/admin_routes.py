@@ -1650,3 +1650,26 @@ async def delete_role(
     await role.delete()
     return MessageResponse(message=f"Custom role '{role.name}' has been deleted.")
 
+
+@router.post(
+    "/billing/process-expirations",
+    summary="Super Admin: Trigger expiry and grace period worker",
+)
+async def trigger_billing_expiry_worker(
+    admin: User = Depends(get_current_user),
+):
+    """Run the expiry worker on demand to process expired grace periods and period-end cancellations."""
+    if not admin.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Administrative privileges required."},
+        )
+
+    from app.billing_service import process_expired_subscriptions
+    results = await process_expired_subscriptions()
+    return {
+        "success": True,
+        "message": "Billing expiry worker executed successfully.",
+        "results": results,
+    }
+

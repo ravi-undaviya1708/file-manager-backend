@@ -27,9 +27,16 @@ class Settings(BaseSettings):
     # Cashfree Payments Configuration
     CASHFREE_APP_ID: str = ""
     CASHFREE_SECRET_KEY: str = ""
+    CASHFREE_WEBHOOK_SECRET: str = ""
     CASHFREE_ENV: str = "SANDBOX"
     CASHFREE_MODE: str = ""
-    CASHFREE_API_VERSION: str = "2023-08-01"
+    CASHFREE_API_VERSION: str = "2025-01-01"
+    CASHFREE_SUBSCRIPTION_SERVICE: str = "pg"  # "pg" for PG Subscriptions v2, "sub" for Subscriptions v1
+    CASHFREE_WEBHOOK_MAX_SKEW_SECONDS: int = 300  # 5 minutes maximum webhook timestamp skew
+
+    # Background Billing Expiry Scheduler Configuration
+    BILLING_EXPIRY_WORKER_ENABLED: bool = True
+    BILLING_EXPIRY_INTERVAL_SECONDS: int = 21600  # Run every 6 hours by default
     
     # Backblaze B2 Storage Configuration
     B2_KEY_ID: str = ""

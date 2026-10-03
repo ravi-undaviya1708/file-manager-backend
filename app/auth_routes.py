@@ -71,8 +71,8 @@ def _to_user_response(user: User) -> UserResponse:
         if diff <= 0 and user.pricing_plan == "free":
             sub_status = "expired"
 
-    if user.pricing_plan != "free":
-        sub_status = getattr(user, "subscription_status", "active") or "active"
+    if user.pricing_plan != "free" and not sub_status:
+        sub_status = "active"
 
     sub_expires_str = None
     if getattr(user, "subscription_expires_at", None):

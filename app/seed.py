@@ -139,12 +139,112 @@ async def seed_roles() -> None:
             await Role(**r_data).insert()
 
 
+async def seed_billing_plans() -> None:
+    """Seed default subscription plans into the plans collection if not present."""
+    from app.models import Plan
+
+    default_plans = [
+        {
+            "code": "free",
+            "name": "Free Starter",
+            "billing_interval": "free",
+            "amount_paise": 0,
+            "currency": "INR",
+            "storage_quota_bytes": 16106127360,  # 15 GB
+            "version": 1,
+            "is_active": True,
+        },
+        {
+            "code": "personal",
+            "name": "Personal Plan",
+            "billing_interval": "monthly",
+            "amount_paise": 11900,  # ₹119.00
+            "currency": "INR",
+            "storage_quota_bytes": 53687091200,  # 50 GB
+            "version": 1,
+            "is_active": True,
+        },
+        {
+            "code": "personal",
+            "name": "Personal Plan",
+            "billing_interval": "annual",
+            "amount_paise": 119000,  # ₹1,190.00
+            "currency": "INR",
+            "storage_quota_bytes": 53687091200,  # 50 GB
+            "version": 1,
+            "is_active": True,
+        },
+        {
+            "code": "plus",
+            "name": "Plus Plan",
+            "billing_interval": "monthly",
+            "amount_paise": 29900,  # ₹299.00
+            "currency": "INR",
+            "storage_quota_bytes": 214748364800,  # 200 GB
+            "version": 1,
+            "is_active": True,
+        },
+        {
+            "code": "plus",
+            "name": "Plus Plan",
+            "billing_interval": "annual",
+            "amount_paise": 299000,  # ₹2,990.00
+            "currency": "INR",
+            "storage_quota_bytes": 214748364800,  # 200 GB
+            "version": 1,
+            "is_active": True,
+        },
+        {
+            "code": "power",
+            "name": "Power Plan",
+            "billing_interval": "monthly",
+            "amount_paise": 99900,  # ₹999.00
+            "currency": "INR",
+            "storage_quota_bytes": 1099511627776,  # 1 TB
+            "version": 1,
+            "is_active": True,
+        },
+        {
+            "code": "power",
+            "name": "Power Plan",
+            "billing_interval": "annual",
+            "amount_paise": 999000,  # ₹9,990.00
+            "currency": "INR",
+            "storage_quota_bytes": 1099511627776,  # 1 TB
+            "version": 1,
+            "is_active": True,
+        },
+        {
+            "code": "power",
+            "name": "Power Lifetime Plan",
+            "billing_interval": "lifetime",
+            "amount_paise": 1999000,  # ₹19,990.00
+            "currency": "INR",
+            "storage_quota_bytes": 1099511627776,  # 1 TB
+            "version": 1,
+            "is_active": True,
+        },
+    ]
+
+    for p_data in default_plans:
+        existing = await Plan.find_one(
+            Plan.code == p_data["code"],
+            Plan.billing_interval == p_data["billing_interval"],
+            Plan.version == p_data["version"],
+        )
+        if not existing:
+            await Plan(**p_data).insert()
+
+
 async def seed_database() -> None:
     """Insert seed data if the database is empty."""
     # 1. Seed default system roles
     await seed_roles()
 
-    # 2. Check for optional initial admin email from environment
+    # 2. Seed default billing plans
+    await seed_billing_plans()
+
+    # 3. Check for optional initial admin email from environment
     import os
     from app.models import User
     admin_email = os.getenv("INITIAL_ADMIN_EMAIL", "").strip().lower()

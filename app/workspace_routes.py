@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
-from app.models import User, FileSystemItem
+from app.models import User, FileSystemItem, Entitlement, StoragePartition
 from app import crud
 from app.b2 import (
     create_b2_object_async,
@@ -149,6 +149,37 @@ async def create_workspace_file(
     # Determine initial file content
     initial_content = body.content if body.content is not None and body.content != "" else _get_starter_content(body.name)
     content_bytes = initial_content.encode("utf-8")
+    file_size = len(content_bytes)
+
+    # Check Entitlement permissions
+    owner_entitlement = await Entitlement.find_one(Entitlement.user_id == str(owner_id))
+    if owner_entitlement and not owner_entitlement.can_upload:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Uploads and file creation are blocked because your subscription grace period has expired. Please renew your subscription to restore upload access."}
+        )
+
+    # Check overall user storage limit
+    owner_user = await User.get(owner_id)
+    limit_bytes = owner_user.storage_limit_bytes if owner_user else current_user.storage_limit_bytes
+    current_used = await crud.get_user_storage_size(owner_id)
+    if current_used + file_size > limit_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Storage limit exceeded. Cannot create file (Size: {file_size} bytes, Used: {current_used} bytes, Limit: {limit_bytes} bytes)."}
+        )
+
+    # Check partition storage limit if target is in a partition
+    if parent.partition_id:
+        partition = await StoragePartition.get(parent.partition_id)
+        if partition:
+            part_map = await crud.get_all_partitions_used_sizes(owner_id)
+            partition_used = part_map.get(str(partition.id), 0)
+            if partition_used + file_size > partition.allocated_size_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"Partition '{partition.name}' storage limit exceeded. Cannot create file (Size: {file_size} bytes, Used: {partition_used} bytes, Allocation: {partition.allocated_size_bytes} bytes)."}
+                )
 
     # Create Mongo item
     item = await crud.create_item(
@@ -156,7 +187,7 @@ async def create_workspace_file(
         item_type="file",
         user_id=owner_id,
         parent_id=parent_target_id,
-        size=len(content_bytes),
+        size=file_size,
         partition_id=parent.partition_id
     )
 
@@ -171,7 +202,7 @@ async def create_workspace_file(
         "name": item.name,
         "type": "file",
         "parentId": item.parent_id,
-        "size": len(content_bytes),
+        "size": file_size,
         "createdAt": item.created_at.isoformat() if item.created_at else None,
         "content": initial_content,
     }
@@ -192,6 +223,14 @@ async def create_workspace_folder(
 
     await verify_write_access(parent, current_user)
     owner_id = parent.user_id if parent.user_id else str(current_user.id)
+
+    # Check Entitlement file management permission
+    owner_entitlement = await Entitlement.find_one(Entitlement.user_id == str(owner_id))
+    if owner_entitlement and not owner_entitlement.can_manage_files:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Folder creation is blocked because your account permissions are restricted."}
+        )
 
     # Check duplicate
     if await crud.check_duplicate_name(body.name, parent_target_id, "folder", owner_id):

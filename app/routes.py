@@ -13,7 +13,7 @@ from typing import List, Optional
 
 from app import crud
 from app.auth import get_current_user
-from app.models import User, FileSystemItem
+from app.models import User, FileSystemItem, Entitlement
 from app.schemas import (
     CreateFolderRequest,
     ErrorResponse,
@@ -813,6 +813,14 @@ async def upload_file(
     owner_user = await User.get(owner_id)
     limit_bytes = owner_user.storage_limit_bytes if owner_user else current_user.storage_limit_bytes
 
+    # Check Entitlement permissions if defined
+    owner_entitlement = await Entitlement.find_one(Entitlement.user_id == str(owner_id))
+    if owner_entitlement and not owner_entitlement.can_upload:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Uploads are blocked because your subscription grace period has expired. Please renew your subscription to restore upload access."}
+        )
+
     # Check overall user storage limit
     current_used = await crud.get_user_storage_size(owner_id)
     if current_used + file_size > limit_bytes:
@@ -904,18 +912,55 @@ async def upload_chunk(
     else:
         partition_id = partitionId
 
+    if totalChunks <= 0 or chunkIndex < 0 or chunkIndex >= totalChunks:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Invalid chunk index {chunkIndex} for total chunks {totalChunks}."},
+        )
+
     if not filename:
         raise HTTPException(
             status_code=400, detail={"error": "Filename is required."}
         )
 
-    # Validate name duplicate on the first chunk to prevent wasting time on duplicate uploads
+    # Early validation on the first chunk to prevent wasting client/server bandwidth & disk resources
     if chunkIndex == 0:
+        # 1. Duplicate filename check
         if await crud.check_duplicate_name(filename, parentId, "file", owner_id):
             raise HTTPException(
                 status_code=409,
                 detail={"error": f'A file named "{filename}" already exists in this location.'},
             )
+
+        # 2. Entitlement check (e.g. expired grace period)
+        owner_entitlement = await Entitlement.find_one(Entitlement.user_id == str(owner_id))
+        if owner_entitlement and not owner_entitlement.can_upload:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Uploads are blocked because your subscription grace period has expired. Please renew your subscription to restore upload access."}
+            )
+
+        # 3. Storage quota check
+        owner_user = await User.get(owner_id)
+        limit_bytes = owner_user.storage_limit_bytes if owner_user else current_user.storage_limit_bytes
+        current_used = await crud.get_user_storage_size(owner_id)
+        if current_used >= limit_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Storage limit exceeded. Cannot start upload (Used: {current_used} bytes, Limit: {limit_bytes} bytes)."}
+            )
+
+        # 4. Partition storage check
+        if partition_id:
+            partition = await StoragePartition.get(partition_id)
+            if partition:
+                part_map = await crud.get_all_partitions_used_sizes(owner_id)
+                partition_used = part_map.get(str(partition.id), 0)
+                if partition_used >= partition.allocated_size_bytes:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"error": f"Partition '{partition.name}' storage limit reached. Cannot start upload."}
+                    )
 
     # Path to temp directory for this upload
     temp_dir = os.path.join(tempfile.gettempdir(), f"getfilenova_upload_{uploadId}")
@@ -977,6 +1022,16 @@ async def upload_chunk(
             
             # Calculate final file size
             file_size = os.path.getsize(merged_file_path)
+
+            # Check Entitlement permissions if defined
+            owner_entitlement = await Entitlement.find_one(Entitlement.user_id == str(owner_id))
+            if owner_entitlement and not owner_entitlement.can_upload:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                await clean_upload_lock(uploadId)
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "Uploads are blocked because your subscription grace period has expired. Please renew your subscription to restore upload access."}
+                )
 
             # Check overall user storage limit under owner_id
             owner_user = await User.get(owner_id)

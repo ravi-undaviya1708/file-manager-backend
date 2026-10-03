@@ -5,10 +5,9 @@ from __future__ import annotations
 import random
 import logging
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
@@ -25,14 +24,29 @@ from app.billing_plans import (
     get_storage_limit,
     compute_subscription_expiry,
 )
+from app.billing_service import sync_user_entitlement, process_webhook_payload
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/payments", tags=["Billing & Payments"])
 
 
-# @router.post(
-#     "/create-order",
+@router.post(
+    "/webhook",
+    summary="Cashfree Webhook Endpoint for payment and recurring subscription events",
+)
+async def cashfree_webhook(request: Request):
+    """Receive, cryptographically verify, and idempotently process Cashfree webhooks."""
+    raw_body = await request.body()
+    headers = dict(request.headers)
+
+    res_body, status_code = await process_webhook_payload(raw_body, headers)
+    if status_code != 200:
+        raise HTTPException(
+            status_code=status_code,
+            detail=res_body.get("error", "Webhook processing failed"),
+        )
+    return res_body
 #     response_model=CreateOrderResponse,
 #     summary="Create a checkout order with Cashfree"
 # ── Pricing Configuration ───────────────────────────────────────────────────
@@ -146,7 +160,14 @@ async def _create_cashfree_order_api(
     app_id = settings.CASHFREE_APP_ID
     secret_key = settings.CASHFREE_SECRET_KEY
 
-    if not app_id or not secret_key or app_id.startswith("mock_"):
+    if (
+        not app_id
+        or not secret_key
+        or settings.CASHFREE_MODE == "test"
+        or app_id.startswith("mock_")
+        or app_id.startswith("test_")
+        or app_id.startswith("TEST")
+    ):
         return None, None
 
     import httpx
@@ -503,6 +524,19 @@ async def verify_payment(
     if not current_user.customer_id:
         current_user.customer_id = payment_record.customer_id
     await current_user.save()
+
+    # Synchronize Entitlement model
+    await sync_user_entitlement(
+        user_id=str(current_user.id),
+        plan_code=plan_name,
+        storage_quota_bytes=storage_bytes,
+        billing_status="active",
+        can_upload=True,
+        can_download=True,
+        actor_type="user",
+        actor_id=str(current_user.id),
+        correlation_id=body.orderId,
+    )
 
     return VerifyPaymentResponse(
         success=True,
